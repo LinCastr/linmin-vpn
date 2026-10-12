@@ -1,0 +1,157 @@
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Language: pt_BR\n"
+
+msgid "Allow"
+msgstr "Permitir"
+
+msgid "Allow it once and the VPN will only configure its own network interface, without asking again."
+msgstr "Permita uma vez e a VPN passa a configurar só a própria interface de rede, sem perguntar de novo."
+
+msgid "Allow without password"
+msgstr "Permitir sem senha"
+
+msgid "APPEARANCE"
+msgstr "APARÊNCIA"
+
+msgid "Asks for the administrator password on each start."
+msgstr "Pede a senha de administrador a cada vez que liga."
+
+msgid "Back"
+msgstr "Voltar"
+
+msgid "Colors"
+msgstr "Cores"
+
+msgid "Connected"
+msgstr "Conectada"
+
+msgid "Connecting…"
+msgstr "Conectando…"
+
+msgid "copy"
+msgstr "copiar"
+
+msgid "Copy"
+msgstr "Copiar"
+
+msgid "Default"
+msgstr "Padrão"
+
+msgid "Download"
+msgstr "Baixar"
+
+msgid "Each start asks for the administrator password."
+msgstr "Cada vez que liga, pede a senha de administrador."
+
+msgid "It runs the official Radmin VPN through Wine (radmin-vpn-linux, about 180 MB)."
+msgstr "Ele roda o Radmin VPN oficial pelo Wine (radmin-vpn-linux, cerca de 180 MB)."
+
+msgid "Language"
+msgstr "Idioma"
+
+msgid "Launcher log"
+msgstr "Log do iniciador"
+
+msgid "Manage networks"
+msgstr "Gerenciar redes"
+
+msgid "Nobody yet. Addresses show up once there is traffic with them."
+msgstr "Ninguém ainda. Os endereços aparecem quando há tráfego com eles."
+
+msgid "No wallust palette found"
+msgstr "Nenhuma paleta do wallust encontrada"
+
+msgid "Off"
+msgstr "Desligada"
+
+msgid "Only the radminvpn0 interface can be configured."
+msgstr "Só a interface radminvpn0 pode ser configurada."
+
+msgid "Open"
+msgstr "Abrir"
+
+msgid "PERMISSIONS"
+msgstr "PERMISSÕES"
+
+msgid "Radmin VPN for Linux is not installed yet."
+msgstr "O Radmin VPN para Linux ainda não está instalado."
+
+msgid "Remove"
+msgstr "Remover"
+
+msgid "SEEN ON THE NETWORK"
+msgstr "VISTOS NA REDE"
+
+msgid "Settings"
+msgstr "Configurações"
+
+msgid "STARTUP"
+msgstr "INICIALIZAÇÃO"
+
+msgid "Start with the session"
+msgstr "Iniciar com a sessão"
+
+msgid "Stays in the tray, window closed."
+msgstr "Fica na bandeja, com a janela fechada."
+
+msgid "Stopped unexpectedly"
+msgstr "Parou sozinha"
+
+msgid "System"
+msgstr "Sistema"
+
+msgid "The password-free access is from an older version."
+msgstr "O acesso sem senha é de uma versão anterior."
+
+msgid "Turning off…"
+msgstr "Desligando…"
+
+msgid "Turn the VPN on at startup"
+msgstr "Ligar a VPN ao iniciar"
+
+msgid "Turn the VPN on to see who is around."
+msgstr "Ligue a VPN para ver quem está por perto."
+
+msgid "Update"
+msgstr "Atualizar"
+
+msgid "Without password"
+msgstr "Sem senha"
+
+msgid "YOUR ADDRESS"
+msgstr "SEU ENDEREÇO"
+
+msgid "The file is already in your Downloads folder; nothing to download."
+msgstr "O arquivo já está na sua pasta Downloads; não precisa baixar."
+
+msgid "Install"
+msgstr "Instalar"
+
+msgid "NETWORKS"
+msgstr "REDES"
+
+msgid "Leave"
+msgstr "Sair"
+
+msgid "Rename"
+msgstr "Renomear"
+
+msgid "Your name on the network"
+msgstr "Seu nome na rede"
+
+msgid "No networks yet. Use “Manage networks” to create or join one."
+msgstr "Nenhuma rede ainda. Use “Gerenciar redes” para criar ou entrar."
+
+msgid "Turn the VPN on to see your networks."
+msgstr "Ligue a VPN para ver suas redes."
+
+msgid "Leave “{}”?"
+msgstr "Sair de “{}”?"
+
+msgid "Rejoining needs the network password, which still opens the Radmin window."
+msgstr "Para voltar é preciso a senha da rede, que ainda abre a janela do Radmin."
+
+msgid "Cancel"
+msgstr "Cancelar"

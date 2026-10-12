@@ -1,0 +1,44 @@
+#!/bin/bash
+# sudo shim for the Radmin VPN launcher (radmin-vpn-linux AppImage).
+#
+# radmin-wired puts the directory holding this file first in the launcher's
+# PATH. The launcher's "sudo <command>" calls land here and are forwarded to the
+# privileged helper through pkexec, which the polkit action lets the active
+# session run without a password. Anything the helper does not recognise is
+# refused, so this never grants more than the helper allows.
+HELPER=/usr/local/libexec/radmin-wired/radmin-net
+
+# Drop sudo options; credential checks (-v, -n -v, -A -v, -k) just succeed.
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -p | -u | -g | -C | -h | -D | -R | -T) shift 2 ;;
+        --) shift; break ;;
+        -*) shift ;;
+        *) break ;;
+    esac
+done
+[ $# -eq 0 ] && exit 0
+
+run() { pkexec "$HELPER" "$@"; }
+
+# 'sh -c "<cmd>; <cmd>"' comes from the netsh relay (Radmin setting the adapter
+# address). Split it into simple commands and forward each one.
+if [ "$1" = "sh" ] && [ "${2:-}" = "-c" ]; then
+    rc=0
+    IFS=$'\n' read -r -d '' -a parts < <(printf '%s' "${3:-}" | sed -e 's/&&/\n/g' -e 's/;/\n/g' && printf '\0')
+    for part in "${parts[@]}"; do
+        part=${part//2>\/dev\/null/}
+        part=${part//|| true/}
+        read -r -a words <<<"$part"
+        [ ${#words[@]} -eq 0 ] && continue
+        run "${words[@]}" || rc=$?
+    done
+    exit $rc
+fi
+
+case "$1" in
+    # Reading the kernel log is not needed for the VPN itself.
+    dmesg) exit 1 ;;
+esac
+
+run "$@"

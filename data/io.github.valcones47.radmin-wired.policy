@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <vendor>radmin-wired</vendor>
+  <vendor_url>https://github.com/Valcones47/radmin-wired</vendor_url>
+
+  <!-- Lets the active local session configure the radminvpn0 interface without
+       a password. The helper only accepts commands on that interface. -->
+  <action id="io.github.valcones47.radmin-wired.net">
+    <description>Configure the Radmin VPN network interface</description>
+    <description xml:lang="pt_BR">Configurar a interface de rede do Radmin VPN</description>
+    <message>Radmin VPN needs to configure its network interface</message>
+    <message xml:lang="pt_BR">O Radmin VPN precisa configurar a interface de rede dele</message>
+    <icon_name>network-vpn</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/local/libexec/radmin-wired/radmin-net</annotate>
+  </action>
+</policyconfig>

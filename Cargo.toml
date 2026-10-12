@@ -1,0 +1,27 @@
+[package]
+name = "radmin-wired"
+version = "0.1.0"
+edition = "2024"
+description = "Native Linux front end for Radmin VPN (via radmin-vpn-linux): tray, no terminal, no sudo prompts"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+slint = { version = "1.18", default-features = false, features = ["std", "compat-1-2", "backend-winit-wayland", "backend-winit-x11", "renderer-software"] }
+ksni = { version = "0.3", default-features = false, features = ["blocking", "async-io"] }
+ureq = "2"
+sha2 = "0.10"
+libc = "0.2"
+png = "0.17"
+
+[build-dependencies]
+slint-build = "1.18"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

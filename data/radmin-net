@@ -1,0 +1,125 @@
+#!/bin/bash
+# radmin-net — privileged helper for radmin-wired.
+#
+# Installed root-owned at /usr/local/libexec/radmin-wired/radmin-net and run
+# through pkexec (polkit action io.github.valcones47.radmin-wired.net, which the
+# active local session may use without a password).
+#
+# It only runs the network commands the Radmin VPN launcher needs, and only on
+# the radminvpn0 interface. Every argument is checked against a fixed shape and
+# the command is executed directly (never through a shell), so a caller cannot
+# turn it into a general root shell.
+set -u
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export LC_ALL=C
+
+DEV=radminvpn0
+IP=/usr/bin/ip
+[ -x "$IP" ] || IP=/sbin/ip
+
+deny() {
+    echo "radmin-net: refused: $*" >&2
+    exit 126
+}
+
+# Validators -----------------------------------------------------------------
+is_ipv4() {
+    local a b c d
+    [[ "$1" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]] || return 1
+    for a in "${BASH_REMATCH[@]:1}"; do [ "$a" -le 255 ] || return 1; done
+}
+is_prefix4() { [[ "$1" =~ ^[0-9]{1,2}$ ]] && [ "$1" -le 32 ]; }
+is_cidr4() {
+    local ip=${1%/*} pfx=${1#*/}
+    if [ "$ip" = "$1" ]; then is_ipv4 "$1"; else is_ipv4 "$ip" && is_prefix4 "$pfx"; fi
+}
+# Destinations Radmin uses: its own 26.0.0.0/8, multicast and broadcast.
+# Nothing else may be routed to the VPN (a default route would hijack all traffic).
+is_vpn_dest() {
+    local ip=${1%/*} pfx=32 o1
+    [ "$ip" != "$1" ] && pfx=${1#*/}
+    is_ipv4 "$ip" && is_prefix4 "$pfx" || return 1
+    o1=${ip%%.*}
+    { [ "$o1" -eq 26 ] && [ "$pfx" -ge 8 ]; } ||
+        { [ "$o1" -ge 224 ] && [ "$o1" -le 239 ] && [ "$pfx" -ge 4 ]; } ||
+        [ "$1" = "255.255.255.255/32" ] || [ "$1" = "255.255.255.255" ]
+}
+is_ipv6() { [[ "$1" =~ ^[0-9a-fA-F:]{2,39}$ ]] && [[ "$1" == *:* ]]; }
+is_mac() { [[ "$1" =~ ^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$ ]]; }
+is_metric() { [[ "$1" =~ ^[0-9]{1,5}$ ]]; }
+
+# The user that asked (pkexec sets PKEXEC_UID; plain root use falls back to SUDO_UID).
+caller_uid=${PKEXEC_UID:-${SUDO_UID:-}}
+caller_name=""
+[ -n "$caller_uid" ] && caller_name=$(getent passwd "$caller_uid" | cut -d: -f1)
+
+[ $# -ge 1 ] || deny "no command"
+cmd=$1
+shift
+args="$*"
+
+case "$cmd" in
+    modprobe)
+        [ "$args" = "tun" ] || deny "modprobe $args"
+        exec /usr/bin/modprobe tun
+        ;;
+    nmcli)
+        [ "$args" = "device set $DEV managed no" ] || deny "nmcli $args"
+        command -v nmcli >/dev/null || exit 0
+        exec nmcli device set "$DEV" managed no
+        ;;
+    sysctl)
+        case "$args" in
+            "-w net.ipv4.conf.$DEV.rp_filter=0" | "-w net.ipv4.conf.$DEV.accept_local=1")
+                exec /usr/bin/sysctl "$@" ;;
+            *) deny "sysctl $args" ;;
+        esac
+        ;;
+    ip) ;;
+    *) deny "$cmd" ;;
+esac
+
+# ip ---------------------------------------------------------------------------
+case "$args" in
+    "link delete $DEV" | "link del $DEV")
+        exec "$IP" link delete "$DEV" ;;
+    "link set $DEV up" | "link set $DEV down" | \
+    "link set $DEV multicast on" | "link set $DEV allmulticast on")
+        exec "$IP" "$@" ;;
+    "addr flush dev $DEV")
+        exec "$IP" addr flush dev "$DEV" ;;
+esac
+
+# Shapes with a variable argument.
+if [ $# -eq 8 ] && [ "$1 $2 $3 $4 $5 $6 $7" = "tuntap add dev $DEV mode tap user" ]; then
+    [ -n "$caller_name" ] && [ "$8" = "$caller_name" ] || deny "tuntap for user '$8'"
+    exec "$IP" tuntap add dev "$DEV" mode tap user "$caller_name"
+fi
+if [ $# -eq 5 ] && [ "$1 $2 $3 $4" = "link set $DEV address" ]; then
+    is_mac "$5" || deny "mac '$5'"
+    exec "$IP" link set "$DEV" address "$5"
+fi
+if [ $# -eq 5 ] && [ "$1 $2" = "addr add" ] && [ "$4 $5" = "dev $DEV" ]; then
+    is_cidr4 "$3" && [ "${3%%.*}" = "26" ] || deny "addr '$3'"
+    exec "$IP" addr add "$3" dev "$DEV"
+fi
+if [ $# -eq 6 ] && [ "$1 $2 $3" = "-6 addr add" ] && [ "$5 $6" = "dev $DEV" ]; then
+    [ "${4#*/}" = "128" ] && is_ipv6 "${4%/128}" || deny "addr6 '$4'"
+    exec "$IP" -6 addr add "$4" dev "$DEV"
+fi
+if [ $# -eq 5 ] && [ "$1 $2" = "maddr add" ] && [ "$4 $5" = "dev $DEV" ]; then
+    is_ipv4 "$3" || deny "maddr '$3'"
+    exec "$IP" maddr add "$3" dev "$DEV"
+fi
+if [ "$1" = "route" ] && [ $# -ge 5 ]; then
+    case "$2" in add | replace | append | del | delete) ;; *) deny "route $2" ;; esac
+    is_vpn_dest "$3" || deny "route '$3'"
+    [ "$4 $5" = "dev $DEV" ] || deny "route dev '$5'"
+    if [ $# -eq 5 ]; then
+        exec "$IP" route "$2" "$3" dev "$DEV"
+    elif [ $# -eq 7 ] && [ "$6" = "metric" ] && is_metric "$7"; then
+        exec "$IP" route "$2" "$3" dev "$DEV" metric "$7"
+    fi
+fi
+
+deny "ip $args"

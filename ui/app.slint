@@ -1,0 +1,557 @@
+import { ScrollView, LineEdit } from "std-widgets.slint";
+
+struct NetInfo {
+    name: string,
+    // Hex GUID, used to address commands back to this network.
+    id: string,
+    members: int,
+    peers: [string],
+}
+
+export global Theme {
+    in-out property <color> bg: #121418;
+    in-out property <color> sidebar: #0d0f12;
+    in-out property <color> surface: #181b20;
+    in-out property <color> raised: #1d2026;
+    in-out property <color> hover: #1e2228;
+    in-out property <color> line: #24282f;
+    in-out property <color> text: #e4e6ea;
+    in-out property <color> dim: #8a919b;
+    in-out property <color> faint: #5c636d;
+    in-out property <color> accent: #4d8eff;
+    in-out property <color> on-accent: #ffffff;
+    in-out property <color> warn: #e0b04a;
+    in-out property <color> error: #e5534b;
+}
+
+component Button inherits Rectangle {
+    in property <string> text;
+    in property <bool> primary: false;
+    in property <bool> enabled: true;
+    callback clicked;
+    height: 32px;
+    min-width: label.preferred-width + 24px;
+    border-radius: 6px;
+    background: !root.enabled ? Theme.surface
+        : root.primary ? (ta.has-hover ? Theme.accent.brighter(10%) : Theme.accent)
+        : (ta.has-hover ? Theme.hover : Theme.raised);
+    border-width: root.primary ? 0 : 1px;
+    border-color: Theme.line;
+    label := Text {
+        text: root.text;
+        color: !root.enabled ? Theme.faint : root.primary ? Theme.on-accent : Theme.text;
+        font-size: 13px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+component Switch inherits Rectangle {
+    in property <bool> checked;
+    in property <bool> enabled: true;
+    callback toggled;
+    width: 40px;
+    height: 22px;
+    border-radius: 11px;
+    background: root.checked ? Theme.accent : Theme.raised;
+    border-width: root.checked ? 0 : 1px;
+    border-color: Theme.line;
+    opacity: root.enabled ? 1 : 0.5;
+    Rectangle {
+        width: 16px;
+        height: 16px;
+        border-radius: 8px;
+        y: 3px;
+        x: root.checked ? parent.width - self.width - 3px : 3px;
+        background: root.checked ? Theme.on-accent : Theme.dim;
+        animate x { duration: 120ms; easing: ease-out; }
+    }
+    TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { root.toggled(); }
+    }
+}
+
+component Segmented inherits Rectangle {
+    in property <[string]> options;
+    in property <int> current;
+    callback picked(int);
+    height: 28px;
+    border-radius: 6px;
+    background: Theme.surface;
+    border-width: 1px;
+    border-color: Theme.line;
+    HorizontalLayout {
+        padding: 2px;
+        spacing: 2px;
+        for opt[i] in root.options: Rectangle {
+            border-radius: 4px;
+            background: i == root.current ? Theme.raised : transparent;
+            Text {
+                text: opt;
+                font-size: 12px;
+                color: i == root.current ? Theme.text : Theme.dim;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.picked(i); }
+            }
+            min-width: 64px;
+        }
+    }
+}
+
+component SectionLabel inherits Text {
+    font-size: 11px;
+    font-weight: 600;
+    color: Theme.faint;
+    letter-spacing: 0.5px;
+}
+
+component Row inherits Rectangle {
+    in property <string> title;
+    in property <string> hint;
+    min-height: 44px;
+    vertical-stretch: 0;
+    HorizontalLayout {
+        spacing: 12px;
+        alignment: space-between;
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            horizontal-stretch: 1;
+            Text { text: root.title; color: Theme.text; font-size: 13px; wrap: word-wrap; }
+            if root.hint != "": Text { text: root.hint; color: Theme.dim; font-size: 11px; wrap: word-wrap; }
+        }
+        VerticalLayout {
+            alignment: center;
+            @children
+        }
+    }
+}
+
+component Divider inherits Rectangle {
+    height: 1px;
+    background: Theme.line;
+}
+
+export component AppWindow inherits Window {
+    title: "Radmin VPN";
+    preferred-width: 400px;
+    preferred-height: 560px;
+    min-width: 340px;
+    min-height: 420px;
+    background: Theme.bg;
+    default-font-size: 13px;
+
+    // 0 off, 1 starting, 2 on, 3 stopping, 4 failed
+    in property <int> phase;
+    in property <string> phase-detail;
+    in property <string> ip;
+    in property <[string]> peers;
+    in property <[NetInfo]> networks;
+    in property <string> self-alias;
+    in property <string> toast;
+
+    // Pending leave confirmation.
+    in-out property <string> pending-net-id;
+    in-out property <string> pending-net-name;
+
+    // Setup
+    in property <bool> has-appimage;
+    in property <bool> has-local-copy;
+    in property <bool> downloading;
+    in property <float> download-progress;
+    in property <string> download-text;
+    in property <int> helper-state; // 0 missing, 1 outdated, 2 ok
+    in property <bool> busy;
+
+    // Settings
+    in-out property <bool> show-settings;
+    in property <int> theme-mode;
+    in property <bool> wallust-available;
+    in property <int> language;
+    in property <bool> autostart;
+    in property <bool> connect-on-login;
+
+    callback toggle-vpn;
+    callback open-radmin;
+    callback leave-network(string);
+    callback rename-self(string);
+    callback copy(string);
+    callback download;
+    callback install-helper;
+    callback remove-helper;
+    callback set-theme(int);
+    callback set-language(int);
+    callback set-autostart(bool);
+    callback set-connect-on-login(bool);
+    callback open-log;
+
+    VerticalLayout {
+        padding: 20px;
+        spacing: 16px;
+
+        // Header ---------------------------------------------------------
+        HorizontalLayout {
+            spacing: 12px;
+            VerticalLayout {
+                spacing: 2px;
+                horizontal-stretch: 1;
+                Text {
+                    text: root.show-settings ? @tr("Settings") : "Radmin VPN";
+                    font-size: 18px;
+                    font-weight: 600;
+                    color: Theme.text;
+                }
+                if !root.show-settings: Text {
+                    text: root.phase == 0 ? @tr("Off")
+                        : root.phase == 1 ? (root.phase-detail != "" ? root.phase-detail : @tr("Connecting…"))
+                        : root.phase == 2 ? @tr("Connected")
+                        : root.phase == 3 ? @tr("Turning off…")
+                        : (root.phase-detail != "" ? root.phase-detail : @tr("Stopped unexpectedly"));
+                    color: root.phase == 4 ? Theme.error : Theme.dim;
+                    font-size: 12px;
+                    wrap: word-wrap;
+                }
+            }
+            if !root.show-settings: VerticalLayout {
+                alignment: center;
+                Switch {
+                    checked: root.phase == 1 || root.phase == 2;
+                    enabled: root.has-appimage && root.phase != 3;
+                    toggled => { root.toggle-vpn(); }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                Button {
+                    text: root.show-settings ? @tr("Back") : @tr("Settings");
+                    clicked => { root.show-settings = !root.show-settings; }
+                }
+            }
+        }
+
+        // Main page --------------------------------------------------------
+        if !root.show-settings: VerticalLayout {
+            spacing: 16px;
+            vertical-stretch: 1;
+
+            if !root.has-appimage: VerticalLayout {
+                spacing: 8px;
+                vertical-stretch: 0;
+                Text {
+                    text: @tr("Radmin VPN for Linux is not installed yet.");
+                    color: Theme.text;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: root.downloading ? root.download-text
+                        : root.has-local-copy ? @tr("The file is already in your Downloads folder; nothing to download.")
+                        : @tr("It runs the official Radmin VPN through Wine (radmin-vpn-linux, about 180 MB).");
+                    color: Theme.dim;
+                    font-size: 12px;
+                    wrap: word-wrap;
+                }
+                if root.downloading: Rectangle {
+                    height: 4px;
+                    border-radius: 2px;
+                    background: Theme.raised;
+                    Rectangle {
+                        x: 0;
+                        width: parent.width * root.download-progress;
+                        border-radius: 2px;
+                        background: Theme.accent;
+                    }
+                }
+                if !root.downloading: HorizontalLayout {
+                    alignment: start;
+                    Button {
+                        text: root.has-local-copy ? @tr("Install") : @tr("Download");
+                        primary: true;
+                        clicked => { root.download(); }
+                    }
+                }
+            }
+
+            if root.has-appimage && root.helper-state != 2: VerticalLayout {
+                spacing: 8px;
+                vertical-stretch: 0;
+                Text {
+                    text: root.helper-state == 0
+                        ? @tr("Each start asks for the administrator password.")
+                        : @tr("The password-free access is from an older version.");
+                    color: Theme.text;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: @tr("Allow it once and the VPN will only configure its own network interface, without asking again.");
+                    color: Theme.dim;
+                    font-size: 12px;
+                    wrap: word-wrap;
+                }
+                HorizontalLayout {
+                    alignment: start;
+                    Button {
+                        text: root.helper-state == 0 ? @tr("Allow without password") : @tr("Update");
+                        enabled: !root.busy;
+                        clicked => { root.install-helper(); }
+                    }
+                }
+            }
+
+            if root.has-appimage: VerticalLayout {
+                spacing: 6px;
+                vertical-stretch: 0;
+                SectionLabel { text: @tr("YOUR ADDRESS"); }
+                HorizontalLayout {
+                    spacing: 10px;
+                    Text {
+                        text: root.ip != "" ? root.ip : "—";
+                        font-size: 22px;
+                        font-family: "monospace";
+                        color: root.ip != "" ? Theme.text : Theme.faint;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
+                    if root.ip != "": VerticalLayout {
+                        alignment: center;
+                        Button {
+                            text: @tr("Copy");
+                            clicked => { root.copy(root.ip); }
+                        }
+                    }
+                }
+                if root.phase == 2: HorizontalLayout {
+                    spacing: 8px;
+                    name-edit := LineEdit {
+                        text: root.self-alias;
+                        placeholder-text: @tr("Your name on the network");
+                        horizontal-stretch: 1;
+                        accepted => { root.rename-self(self.text); }
+                    }
+                    Button {
+                        text: @tr("Rename");
+                        enabled: name-edit.text != "" && name-edit.text != root.self-alias;
+                        clicked => { root.rename-self(name-edit.text); }
+                    }
+                }
+            }
+
+            if root.has-appimage: VerticalLayout {
+                spacing: 6px;
+                vertical-stretch: root.networks.length > 0 ? 1 : 0;
+                SectionLabel {
+                    vertical-stretch: 0;
+                    text: @tr("NETWORKS") + (root.networks.length > 0 ? "  " + root.networks.length : "");
+                }
+                if root.networks.length == 0: Text {
+                    vertical-stretch: 0;
+                    text: root.phase == 2
+                        ? @tr("No networks yet. Use “Manage networks” to create or join one.")
+                        : @tr("Turn the VPN on to see your networks.");
+                    color: Theme.dim;
+                    font-size: 12px;
+                    wrap: word-wrap;
+                }
+                if root.networks.length > 0: ScrollView {
+                    vertical-stretch: 1;
+                    VerticalLayout {
+                        spacing: 10px;
+                        for net in root.networks: VerticalLayout {
+                            spacing: 2px;
+                            // Network header: name, member count and Leave.
+                            HorizontalLayout {
+                                spacing: 8px;
+                                padding-left: 4px;
+                                Text {
+                                    text: net.name + "  ·  " + net.members;
+                                    color: Theme.text;
+                                    font-size: 13px;
+                                    font-weight: 600;
+                                    vertical-alignment: center;
+                                    horizontal-stretch: 1;
+                                }
+                                if net.id != "": Button {
+                                    text: @tr("Leave");
+                                    enabled: root.phase == 2;
+                                    clicked => {
+                                        root.pending-net-id = net.id;
+                                        root.pending-net-name = net.name;
+                                        confirm-leave.show();
+                                    }
+                                }
+                            }
+                            for peer in net.peers: Rectangle {
+                                height: 30px;
+                                border-radius: 4px;
+                                background: pta.has-hover ? Theme.hover : transparent;
+                                HorizontalLayout {
+                                    padding-left: 12px;
+                                    padding-right: 8px;
+                                    Text {
+                                        text: peer;
+                                        color: Theme.text;
+                                        vertical-alignment: center;
+                                        horizontal-stretch: 1;
+                                    }
+                                    Text {
+                                        text: pta.has-hover ? @tr("copy") : "";
+                                        color: Theme.faint;
+                                        font-size: 11px;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                                pta := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { root.copy(peer); }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Keeps the footer at the bottom when the list is short.
+            if !root.has-appimage || root.networks.length == 0: Rectangle { vertical-stretch: 1; }
+            if root.has-appimage: HorizontalLayout {
+                spacing: 8px;
+                vertical-stretch: 0;
+                Button {
+                    text: @tr("Manage networks");
+                    enabled: root.phase == 2;
+                    clicked => { root.open-radmin(); }
+                }
+                Text {
+                    text: root.toast;
+                    color: Theme.dim;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    horizontal-alignment: right;
+                }
+            }
+        }
+
+        // Settings page ----------------------------------------------------
+        if root.show-settings: ScrollView {
+            vertical-stretch: 1;
+            VerticalLayout {
+                spacing: 4px;
+                alignment: start;
+                SectionLabel { text: @tr("APPEARANCE"); }
+                Row {
+                    title: @tr("Colors");
+                    hint: root.wallust-available ? "" : @tr("No wallust palette found");
+                    Segmented {
+                        options: [@tr("Default"), "Wallust"];
+                        current: root.theme-mode;
+                        picked(i) => { root.set-theme(i); }
+                    }
+                }
+                Row {
+                    title: @tr("Language");
+                    Segmented {
+                        options: [@tr("System"), "English", "Português"];
+                        current: root.language;
+                        picked(i) => { root.set-language(i); }
+                    }
+                }
+                Divider { }
+                SectionLabel { text: @tr("STARTUP"); }
+                Row {
+                    title: @tr("Start with the session");
+                    hint: @tr("Stays in the tray, window closed.");
+                    Switch {
+                        checked: root.autostart;
+                        toggled => { root.set-autostart(!root.autostart); }
+                    }
+                }
+                Row {
+                    title: @tr("Turn the VPN on at startup");
+                    Switch {
+                        checked: root.connect-on-login;
+                        enabled: root.autostart;
+                        toggled => { root.set-connect-on-login(!root.connect-on-login); }
+                    }
+                }
+                Divider { }
+                SectionLabel { text: @tr("PERMISSIONS"); }
+                Row {
+                    title: @tr("Without password");
+                    hint: root.helper-state == 2
+                        ? @tr("Only the radminvpn0 interface can be configured.")
+                        : @tr("Asks for the administrator password on each start.");
+                    Button {
+                        text: root.helper-state == 2 ? @tr("Remove") : @tr("Allow");
+                        enabled: !root.busy;
+                        clicked => {
+                            if root.helper-state == 2 { root.remove-helper(); } else { root.install-helper(); }
+                        }
+                    }
+                }
+                Divider { }
+                Row {
+                    title: @tr("Launcher log");
+                    Button {
+                        text: @tr("Open");
+                        clicked => { root.open-log(); }
+                    }
+                }
+            }
+        }
+    }
+
+    confirm-leave := PopupWindow {
+        x: (root.width - 300px) / 2;
+        y: (root.height - 150px) / 2;
+        width: 300px;
+        Rectangle {
+            background: Theme.surface;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: Theme.line;
+            VerticalLayout {
+                padding: 16px;
+                spacing: 12px;
+                Text {
+                    text: @tr("Leave “{}”?", root.pending-net-name);
+                    color: Theme.text;
+                    font-size: 14px;
+                    font-weight: 600;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: @tr("Rejoining needs the network password, which still opens the Radmin window.");
+                    color: Theme.dim;
+                    font-size: 12px;
+                    wrap: word-wrap;
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: end;
+                    Button {
+                        text: @tr("Cancel");
+                        clicked => { confirm-leave.close(); }
+                    }
+                    Button {
+                        text: @tr("Leave");
+                        primary: true;
+                        clicked => {
+                            root.leave-network(root.pending-net-id);
+                            confirm-leave.close();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
