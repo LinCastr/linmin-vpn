@@ -11,6 +11,8 @@
 //! Radmin service — see `docs/PROTOCOL.md` "Next steps". The real GUI window
 //! must not run at the same time: the service allows one GUI client on the pipe.
 
+#![allow(dead_code)]
+
 use std::io::{Read, Write};
 use std::os::unix::process::CommandExt;
 use std::path::Path;
@@ -110,6 +112,14 @@ impl Client {
     }
 
     // -- mapped commands -----------------------------------------------------
+
+    pub fn create_network(&self, name: &str, password: &str) -> Result<()> {
+        self.send(&msg::create_network(self.next_id(), name, password))
+    }
+
+    pub fn join_network(&self, name: &str, password: &str) -> Result<()> {
+        self.send(&msg::join_network(self.next_id(), name, password))
+    }
 
     pub fn switch_power(&self, on: bool) -> Result<()> {
         self.send(&msg::switch_power(self.next_id(), on))

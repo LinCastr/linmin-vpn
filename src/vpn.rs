@@ -334,6 +334,7 @@ pub fn peers() -> Vec<String> {
 pub struct WineEnv {
     /// All of the launcher's env vars except `LD_PRELOAD` (service-only DNS shim).
     pub vars: Vec<(String, String)>,
+    #[allow(dead_code)]
     pub prefix: PathBuf,
     /// The bundled `wine` binary, resolved through the launcher's PATH.
     pub wine: PathBuf,

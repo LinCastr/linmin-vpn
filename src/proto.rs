@@ -13,6 +13,8 @@
 //!
 //! See `docs/PROTOCOL.md` for the full reverse-engineering notes.
 
+#![allow(dead_code)]
+
 // Attribute type bytes.
 pub mod ty {
     pub const CONTAINER: u8 = 0x00;
@@ -69,6 +71,10 @@ impl Attr {
 
     pub fn guid(tag: u16, v: [u8; 16]) -> Self {
         Attr::new(tag, Value::Guid(v))
+    }
+
+    pub fn bytes(tag: u16, v: Vec<u8>) -> Self {
+        Attr::new(tag, Value::Bytes(v))
     }
 
     pub fn container(tag: u16, attrs: Vec<Attr>) -> Self {

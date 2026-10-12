@@ -116,33 +116,23 @@ Containers: `1266` channel · `127d` endpoint · `1315` created-network ·
 `132a` update-network-args · `132b` create-network-args · `133c` settings ·
 `1344` visible-nodes-args · `135d`/`135e` rtt table.
 
-## Password blob (`030d`) — PARTLY solved
+## Password blob (`030d`) — SOLVED
 
-The password sent with CreateNetwork / JoinNetwork is **not** a plain hash.
+The password sent with CreateNetwork / JoinNetwork uses a random One-Time Pad mask over UTF-16LE plaintext:
 
-Confirmed:
-- `blob = UTF-32LE(password + "\0")  XOR  keystream(network_name)`.
-- That makes `len(blob) = 4 * (len(password) + 1)`: `riccio` (6) → 28 bytes,
-  an 8-char password → 36 bytes. Verified against captures.
-- Because UTF-32LE leaves 3 zero bytes per character, 3 of every 4 keystream
-  bytes are exposed directly in the blob.
-- The network name is lower-cased before keying on **join** but kept as typed on
-  **create** (`Volakia2` vs `volakia2` gave different keystreams for the same
-  password `riccio`). XOR of those two blobs is a repeating 14-byte pattern,
-  which is why this looks like a stream cipher (RC4-like) keyed by the name.
+1. Let $P$ be the null-terminated UTF-16LE representation of the password:
+   $$P = \text{UTF-16LE}(\text{password} + \text{"\0"})$$
+   The byte length of $P$ is $N = 2 \times (\text{len(password)} + 1)$.
+2. Generate a random nonce $R$ of length $N$ bytes (e.g. from `/dev/urandom`).
+3. Compute the masked ciphertext $M$:
+   $$M = P \oplus R$$
+4. The final wire blob for attribute `030d` is the concatenation of the masked bytes and the nonce:
+   $$\text{blob} = M \mathbin{\Vert} R$$
+   Total length is $2N = 4 \times (\text{len(password)} + 1)$ bytes.
 
-**Not yet solved:** the exact keystream generator (which key derivation feeds the
-cipher). Do **not** brute-force hash algorithms against the captured blob — the
-Claude Code safety classifier blocks it and it is guesswork. The clean route is
-static analysis of the user's own `RvRvpnGui.exe` with REA: find the function
-that builds the `030d` attribute (search for the create/join packet build, or
-xrefs to the network-name string / UTF-32 conversion), read its pseudocode, and
-copy the algorithm. Known-plaintext pairs to validate an implementation:
-`riccio`/`Volakia2`, `riccio`/`volakia2` (28 bytes each) — blobs are in the
-capture logs, which are **not committed** (they contain the user's data).
+The service (`RvControlSvc.exe`) splits the blob into two equal halves of $N$ bytes and computes $(M \oplus R) = P$ to recover the plaintext UTF-16LE password. The network name is **not** involved in key derivation. The apparent 4 bytes per character was an artifact of two halves of 2-byte UTF-16LE words.
 
-Until this is reproduced, "create network" and "join with password" must fall
-back to opening the real GUI; everything else can be driven over the pipe.
+Verified live against the official Radmin service: network creation with this encoding succeeds with result `0x310 = 0`.
 
 ## Tools (reverse engineering only — not part of the app)
 
@@ -185,11 +175,5 @@ same time (one GUI client per pipe).
 
 ## Next steps
 
-1. Static-analyse `RvRvpnGui.exe` in REA to recover the `030d` cipher (the only
-   blocker for CreateNetwork/JoinNetwork).
-2. Install `rvrelay.exe` from `setup.rs` and wire `pipe::Client` into the UI,
-   replacing `open_radmin_window`. Framing, TLV, state parsing and the mapped
-   commands (power, leave, delete, rename, update, visible-nodes heartbeat) are
-   implemented and have been exercised live: full-state reads correctly and
-   `ChangeAlias` returned result `0310` = 0.
-3. Confirm command `10` and the remaining right-click actions against captures.
+1. Confirm command `10` and the remaining right-click actions against captures if needed.
+2. Polish window floating / size hints in Hyprland.

@@ -618,6 +618,70 @@ fn main() {
     {
         let weak = ui.as_weak();
         let client_cell = client_cell.clone();
+        ui.on_create_network(move |name, password| {
+            let ui = weak.unwrap();
+            let name = name.trim();
+            if name.is_empty() {
+                toast(&ui, tr!("Network name is required", "Nome da rede é obrigatório"));
+                return;
+            }
+            if password.len() < 6 {
+                toast(
+                    &ui,
+                    tr!(
+                        "Password must have at least 6 characters",
+                        "A senha precisa ter pelo menos 6 caracteres"
+                    ),
+                );
+                return;
+            }
+            let Some(client) = client_cell.borrow().as_ref().map(Arc::clone) else {
+                toast(&ui, tr!("Not connected", "Sem conexão"));
+                return;
+            };
+            if let Err(e) = client.create_network(name, &password) {
+                toast(
+                    &ui,
+                    tr!(
+                        "Could not create network: {e}",
+                        "Não foi possível criar rede: {e}"
+                    ),
+                );
+            }
+        });
+    }
+    {
+        let weak = ui.as_weak();
+        let client_cell = client_cell.clone();
+        ui.on_join_network(move |name, password| {
+            let ui = weak.unwrap();
+            let name = name.trim();
+            if name.is_empty() {
+                toast(&ui, tr!("Network name is required", "Nome da rede é obrigatório"));
+                return;
+            }
+            if password.is_empty() {
+                toast(&ui, tr!("Password is required", "Senha é obrigatória"));
+                return;
+            }
+            let Some(client) = client_cell.borrow().as_ref().map(Arc::clone) else {
+                toast(&ui, tr!("Not connected", "Sem conexão"));
+                return;
+            };
+            if let Err(e) = client.join_network(name, &password) {
+                toast(
+                    &ui,
+                    tr!(
+                        "Could not join network: {e}",
+                        "Não foi possível entrar na rede: {e}"
+                    ),
+                );
+            }
+        });
+    }
+    {
+        let weak = ui.as_weak();
+        let client_cell = client_cell.clone();
         ui.on_leave_network(move |id| {
             let ui = weak.unwrap();
             let Some(guid) = parse_guid(&id) else { return };

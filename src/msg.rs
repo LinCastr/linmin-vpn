@@ -6,8 +6,10 @@
 //! the GUI uses it only for the periodic visible-nodes ping. See
 //! `docs/PROTOCOL.md` for the command table.
 //!
-//! Commands that need the `030d` password blob (CreateNetwork, JoinNetwork) are
-//! intentionally absent until the blob cipher is recovered by static analysis.
+//! Commands that need the `030d` password blob (CreateNetwork, JoinNetwork)
+//! are implemented using the UTF-16LE one-time pad cipher.
+
+#![allow(dead_code)]
 
 use crate::proto::{Attr, Value};
 
@@ -16,6 +18,8 @@ pub const NO_REPLY: u32 = 0xffff_ffff;
 
 // Command codes (attribute 0300). Separate number space from event types.
 pub mod cmd {
+    pub const CREATE_NETWORK: u32 = 2;
+    pub const JOIN_NETWORK: u32 = 3;
     pub const SWITCH_POWER: u32 = 4;
     pub const LEAVE_NETWORK: u32 = 5;
     pub const UPDATE_NETWORK: u32 = 14;
@@ -33,19 +37,76 @@ mod tag {
     pub const NET_NAME: u16 = 0x0306;
     pub const NET_PROP_A: u16 = 0x0308;
     pub const NET_GUID: u16 = 0x0309;
+    pub const PASSWORD_BLOB: u16 = 0x030d;
     pub const POWER: u16 = 0x0311;
     pub const NET_PROP_B: u16 = 0x031c;
     pub const NET_PROP_C: u16 = 0x0323;
+    pub const JOIN_BOOL: u16 = 0x033f;
     pub const LANG: u16 = 0x025a;
     pub const VISIBLE_PARAM: u16 = 0x0376;
     pub const NODE_ID: u16 = 0x01e1;
+    pub const JOIN_NET_ARGS: u16 = 0x131b;
     pub const UPDATE_NET_ARGS: u16 = 0x132a;
+    pub const CREATE_NET_ARGS: u16 = 0x132b;
     pub const VISIBLE_ARGS: u16 = 0x1344;
 }
 
 /// Starts a command: request id then command code. Args are appended by caller.
 fn head(req_id: u32, code: u32) -> Vec<Attr> {
     vec![Attr::u32(tag::REQ_ID, req_id), Attr::u32(tag::CMD, code)]
+}
+
+/// Encodes a network password into the wire blob (tag 0x030d).
+///
+/// Wire format: UTF-16LE(password + "\0") masked with a random one-time nonce of
+/// the same byte length: `(utf16 ^ nonce) || nonce`.
+pub fn encode_password_blob(password: &str) -> Vec<u8> {
+    let mut utf16 = Vec::new();
+    for u in password.encode_utf16() {
+        utf16.extend_from_slice(&u.to_le_bytes());
+    }
+    utf16.extend_from_slice(&0u16.to_le_bytes());
+
+    let n = utf16.len();
+    let mut nonce = vec![0u8; n];
+    if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
+        use std::io::Read;
+        let _ = f.read_exact(&mut nonce);
+    }
+    let mut out = Vec::with_capacity(2 * n);
+    for i in 0..n {
+        out.push(utf16[i] ^ nonce[i]);
+    }
+    out.extend_from_slice(&nonce);
+    out
+}
+
+/// Creates a new network (command 2).
+pub fn create_network(req_id: u32, name: &str, password: &str) -> Vec<Attr> {
+    let mut m = head(req_id, cmd::CREATE_NETWORK);
+    m.push(Attr::container(
+        tag::CREATE_NET_ARGS,
+        vec![
+            Attr::bool(tag::NET_PROP_A, false),
+            Attr::str(tag::NET_NAME, name),
+            Attr::bytes(tag::PASSWORD_BLOB, encode_password_blob(password)),
+        ],
+    ));
+    m
+}
+
+/// Joins an existing network (command 3).
+pub fn join_network(req_id: u32, name: &str, password: &str) -> Vec<Attr> {
+    let mut m = head(req_id, cmd::JOIN_NETWORK);
+    m.push(Attr::container(
+        tag::JOIN_NET_ARGS,
+        vec![
+            Attr::bool(tag::JOIN_BOOL, false),
+            Attr::str(tag::NET_NAME, name),
+            Attr::bytes(tag::PASSWORD_BLOB, encode_password_blob(password)),
+        ],
+    ));
+    m
 }
 
 /// Turns the VPN on or off (command 4).
@@ -170,5 +231,38 @@ mod tests {
         r.feed(&frame);
         let body = r.next_frame().unwrap();
         assert_eq!(decode_body(&body).unwrap(), m);
+    }
+
+    #[test]
+    fn password_blob_decodes_back_via_halves_xor() {
+        let pw = "MinhaSenha123";
+        let blob = encode_password_blob(pw);
+        let half = blob.len() / 2;
+        assert_eq!(blob.len() % 2, 0);
+
+        let mut decoded_bytes = Vec::with_capacity(half);
+        for i in 0..half {
+            decoded_bytes.push(blob[i] ^ blob[i + half]);
+        }
+
+        let mut u16_words = Vec::new();
+        for chunk in decoded_bytes.chunks_exact(2) {
+            u16_words.push(u16::from_le_bytes([chunk[0], chunk[1]]));
+        }
+        assert_eq!(u16_words.last(), Some(&0u16));
+        u16_words.pop();
+        let decoded_str = String::from_utf16(&u16_words).unwrap();
+        assert_eq!(decoded_str, pw);
+    }
+
+    #[test]
+    fn create_and_join_network_shapes() {
+        let m_create = create_network(1, "SalaJogo", "senha123");
+        assert_eq!(first(&m_create, 0x034a), &Value::U32(1));
+        assert_eq!(first(&m_create, 0x0300), &Value::U32(cmd::CREATE_NETWORK));
+
+        let m_join = join_network(2, "SalaJogo", "senha123");
+        assert_eq!(first(&m_join, 0x034a), &Value::U32(2));
+        assert_eq!(first(&m_join, 0x0300), &Value::U32(cmd::JOIN_NETWORK));
     }
 }

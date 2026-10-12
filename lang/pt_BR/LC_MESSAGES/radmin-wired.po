@@ -150,8 +150,45 @@ msgstr "Ligue a VPN para ver suas redes."
 msgid "Leave “{}”?"
 msgstr "Sair de “{}”?"
 
-msgid "Rejoining needs the network password, which still opens the Radmin window."
-msgstr "Para voltar é preciso a senha da rede, que ainda abre a janela do Radmin."
+msgid "You will need the password to rejoin this network."
+msgstr "Será necessária a senha para entrar nesta rede novamente."
 
 msgid "Cancel"
 msgstr "Cancelar"
+
+msgid "Create network"
+msgstr "Criar rede"
+
+msgid "Join network"
+msgstr "Entrar em rede"
+
+msgid "Network name"
+msgstr "Nome da rede"
+
+msgid "Password"
+msgstr "Senha"
+
+msgid "Confirm password"
+msgstr "Confirmar senha"
+
+msgid "At least 6 characters"
+msgstr "Pelo menos 6 caracteres"
+
+msgid "Passwords do not match"
+msgstr "As senhas não coincidem"
+
+msgid "Create"
+msgstr "Criar"
+
+msgid "Join"
+msgstr "Entrar"
+
+msgid "No networks yet. Create or join one below."
+msgstr "Nenhuma rede ainda. Crie ou entre em uma rede abaixo."
+
+msgid "Radmin window"
+msgstr "Janela do Radmin"
+
+msgid "Opens the original Wine window."
+msgstr "Abre a janela original pelo Wine."
+

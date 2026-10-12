@@ -165,6 +165,13 @@ export component AppWindow inherits Window {
     in-out property <string> pending-net-id;
     in-out property <string> pending-net-name;
 
+    // Create / join network dialog fields.
+    in-out property <string> create-net-name;
+    in-out property <string> create-net-pw;
+    in-out property <string> create-net-pw-confirm;
+    in-out property <string> join-net-name;
+    in-out property <string> join-net-pw;
+
     // Setup
     in property <bool> has-appimage;
     in property <bool> has-local-copy;
@@ -184,6 +191,8 @@ export component AppWindow inherits Window {
 
     callback toggle-vpn;
     callback open-radmin;
+    callback create-network(string, string);
+    callback join-network(string, string);
     callback leave-network(string);
     callback rename-self(string);
     callback copy(string);
@@ -356,7 +365,7 @@ export component AppWindow inherits Window {
                 if root.networks.length == 0: Text {
                     vertical-stretch: 0;
                     text: root.phase == 2
-                        ? @tr("No networks yet. Use “Manage networks” to create or join one.")
+                        ? @tr("No networks yet. Create or join one below.")
                         : @tr("Turn the VPN on to see your networks.");
                     color: Theme.dim;
                     font-size: 12px;
@@ -426,9 +435,23 @@ export component AppWindow inherits Window {
                 spacing: 8px;
                 vertical-stretch: 0;
                 Button {
-                    text: @tr("Manage networks");
+                    text: @tr("Create network");
                     enabled: root.phase == 2;
-                    clicked => { root.open-radmin(); }
+                    clicked => {
+                        root.create-net-name = "";
+                        root.create-net-pw = "";
+                        root.create-net-pw-confirm = "";
+                        create-dialog.show();
+                    }
+                }
+                Button {
+                    text: @tr("Join network");
+                    enabled: root.phase == 2;
+                    clicked => {
+                        root.join-net-name = "";
+                        root.join-net-pw = "";
+                        join-dialog.show();
+                    }
                 }
                 Text {
                     text: root.toast;
@@ -506,6 +529,140 @@ export component AppWindow inherits Window {
                         clicked => { root.open-log(); }
                     }
                 }
+                Divider { }
+                Row {
+                    title: @tr("Radmin window");
+                    hint: @tr("Opens the original Wine window.");
+                    Button {
+                        text: @tr("Open");
+                        enabled: root.phase == 2;
+                        clicked => { root.open-radmin(); }
+                    }
+                }
+            }
+        }
+    }
+
+    create-dialog := PopupWindow {
+        x: (root.width - 320px) / 2;
+        y: (root.height - 290px) / 2;
+        width: 320px;
+        Rectangle {
+            background: Theme.surface;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: Theme.line;
+            VerticalLayout {
+                padding: 16px;
+                spacing: 12px;
+                Text {
+                    text: @tr("Create network");
+                    color: Theme.text;
+                    font-size: 14px;
+                    font-weight: 600;
+                }
+                VerticalLayout {
+                    spacing: 4px;
+                    Text { text: @tr("Network name"); font-size: 11px; color: Theme.dim; }
+                    LineEdit {
+                        text <=> root.create-net-name;
+                        placeholder-text: @tr("Network name");
+                    }
+                }
+                VerticalLayout {
+                    spacing: 4px;
+                    Text { text: @tr("Password"); font-size: 11px; color: Theme.dim; }
+                    LineEdit {
+                        text <=> root.create-net-pw;
+                        input-type: password;
+                        placeholder-text: @tr("At least 6 characters");
+                    }
+                }
+                VerticalLayout {
+                    spacing: 4px;
+                    Text { text: @tr("Confirm password"); font-size: 11px; color: Theme.dim; }
+                    LineEdit {
+                        text <=> root.create-net-pw-confirm;
+                        input-type: password;
+                    }
+                }
+                if root.create-net-pw-confirm != "" && root.create-net-pw != root.create-net-pw-confirm: Text {
+                    text: @tr("Passwords do not match");
+                    color: Theme.error;
+                    font-size: 11px;
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: end;
+                    Button {
+                        text: @tr("Cancel");
+                        clicked => { create-dialog.close(); }
+                    }
+                    Button {
+                        text: @tr("Create");
+                        primary: true;
+                        enabled: root.create-net-name != "" && root.create-net-pw != "" && root.create-net-pw == root.create-net-pw-confirm;
+                        clicked => {
+                            root.create-network(root.create-net-name, root.create-net-pw);
+                            create-dialog.close();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    join-dialog := PopupWindow {
+        x: (root.width - 320px) / 2;
+        y: (root.height - 220px) / 2;
+        width: 320px;
+        Rectangle {
+            background: Theme.surface;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: Theme.line;
+            VerticalLayout {
+                padding: 16px;
+                spacing: 12px;
+                Text {
+                    text: @tr("Join network");
+                    color: Theme.text;
+                    font-size: 14px;
+                    font-weight: 600;
+                }
+                VerticalLayout {
+                    spacing: 4px;
+                    Text { text: @tr("Network name"); font-size: 11px; color: Theme.dim; }
+                    LineEdit {
+                        text <=> root.join-net-name;
+                        placeholder-text: @tr("Network name");
+                    }
+                }
+                VerticalLayout {
+                    spacing: 4px;
+                    Text { text: @tr("Password"); font-size: 11px; color: Theme.dim; }
+                    LineEdit {
+                        text <=> root.join-net-pw;
+                        input-type: password;
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: end;
+                    Button {
+                        text: @tr("Cancel");
+                        clicked => { join-dialog.close(); }
+                    }
+                    Button {
+                        text: @tr("Join");
+                        primary: true;
+                        enabled: root.join-net-name != "" && root.join-net-pw != "";
+                        clicked => {
+                            root.join-network(root.join-net-name, root.join-net-pw);
+                            join-dialog.close();
+                        }
+                    }
+                }
             }
         }
     }
@@ -530,7 +687,7 @@ export component AppWindow inherits Window {
                     wrap: word-wrap;
                 }
                 Text {
-                    text: @tr("Rejoining needs the network password, which still opens the Radmin window.");
+                    text: @tr("You will need the password to rejoin this network.");
                     color: Theme.dim;
                     font-size: 12px;
                     wrap: word-wrap;
