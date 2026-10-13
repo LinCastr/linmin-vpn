@@ -37,13 +37,24 @@ Radmin VPN is officially Windows-only. While [radmin-vpn-linux](https://github.c
 
 ## Installation & Usage
 
-### Pre-built Binary
-
-Download the latest `linmin-vpn` binary from the [Releases](https://github.com/LinCastr/linmin-vpn/releases) page, make it executable, and place it in your PATH:
+### Quick install
 
 ```bash
-chmod +x linmin-vpn
-mv linmin-vpn ~/.local/bin/
+curl -fsSL https://raw.githubusercontent.com/LinCastr/linmin-vpn/main/install.sh | bash
+```
+
+The script installs to `~/.local` (no root needed), verifies the SHA-256 of the
+release binary, and adds the icon and desktop entry. It only reports missing
+dependencies; it never installs packages for you. Read it first if you like:
+[`install.sh`](install.sh). Pin a version with `LINMIN_VERSION=v0.1.0`.
+
+### Manual install
+
+Download `linmin-vpn-x86_64-linux` from the [Releases](https://github.com/LinCastr/linmin-vpn/releases) page, make it executable, and place it in your PATH:
+
+```bash
+chmod +x linmin-vpn-x86_64-linux
+mv linmin-vpn-x86_64-linux ~/.local/bin/linmin-vpn
 ```
 
 Run `linmin-vpn` to launch the application.
