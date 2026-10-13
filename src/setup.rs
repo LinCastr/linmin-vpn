@@ -409,7 +409,7 @@ pub fn set_autostart(on: bool) -> Result<()> {
     fs::write(
         p,
         format!(
-            "[Desktop Entry]\nType=Application\nName=Radmin VPN\nExec=\"{}\" --tray\nIcon=network-vpn\nTerminal=false\nX-GNOME-Autostart-enabled=true\n",
+            "[Desktop Entry]\nType=Application\nName=Linmin VPN\nExec=\"{}\" --tray\nIcon=network-vpn\nTerminal=false\nX-GNOME-Autostart-enabled=true\n",
             exe.display()
         ),
     )?;

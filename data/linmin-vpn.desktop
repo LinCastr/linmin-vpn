@@ -2,7 +2,7 @@
 Type=Application
 Name=Linmin VPN
 GenericName=VPN Client
-Comment=Cliente nativo para Radmin VPN
+Comment=Cliente nativo para o Radmin VPN
 Exec=linmin-vpn
 Icon=linmin-vpn
 Terminal=false
