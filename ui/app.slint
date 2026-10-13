@@ -1,11 +1,31 @@
 import { ScrollView, LineEdit } from "std-widgets.slint";
 
+struct PeerInfo {
+    alias: string,
+    ip: string,
+    online: bool,
+    latency: string,
+    // Node id (decimal), used to approve an applicant.
+    id: string,
+    // Asked to join and waits for an administrator's approval.
+    applicant: bool,
+}
+
 struct NetInfo {
     name: string,
     // Hex GUID, used to address commands back to this network.
     id: string,
-    members: int,
-    peers: [string],
+    // Peers online / listed, shown as "1/2" like the original client.
+    online: int,
+    total: int,
+    collapsed: bool,
+    allow-without-password: bool,
+    block-new-members: bool,
+    // This machine may delete the network (administrator).
+    can-delete: bool,
+    // Last administrator: the service refuses Leave, only Delete works.
+    last-admin: bool,
+    peers: [PeerInfo],
 }
 
 export global Theme {
@@ -22,25 +42,158 @@ export global Theme {
     in-out property <color> on-accent: #ffffff;
     in-out property <color> warn: #e0b04a;
     in-out property <color> error: #e5534b;
+    // Online signal; semantic like warn/error, so it keeps its hue on wallust.
+    in-out property <color> ok: #27c93f;
+}
+
+// 4 barrinhas de sinal (Theme.ok) para nós online
+component SignalBars inherits Rectangle {
+    in property <bool> online: true;
+    width: 14px;
+    height: 12px;
+    HorizontalLayout {
+        spacing: 1.5px;
+        alignment: end;
+        Rectangle {
+            width: 2px;
+            height: 3px;
+            y: parent.height - self.height;
+            border-radius: 1px;
+            background: root.online ? Theme.ok : Theme.faint;
+        }
+        Rectangle {
+            width: 2px;
+            height: 6px;
+            y: parent.height - self.height;
+            border-radius: 1px;
+            background: root.online ? Theme.ok : Theme.faint;
+        }
+        Rectangle {
+            width: 2px;
+            height: 9px;
+            y: parent.height - self.height;
+            border-radius: 1px;
+            background: root.online ? Theme.ok : Theme.faint;
+        }
+        Rectangle {
+            width: 2px;
+            height: 12px;
+            y: parent.height - self.height;
+            border-radius: 1px;
+            background: root.online ? Theme.ok : Theme.faint;
+        }
+    }
+}
+
+// Ícone discreto para nós offline com cruz ✕ cinza, fiel ao Radmin original
+component OfflineIcon inherits Rectangle {
+    width: 14px;
+    height: 12px;
+    HorizontalLayout {
+        spacing: 2px;
+        alignment: start;
+        Text {
+            text: "✕";
+            font-size: 10px;
+            font-weight: 700;
+            color: Theme.faint;
+            vertical-alignment: center;
+        }
+        Rectangle {
+            width: 2px;
+            height: 4px;
+            y: parent.height - self.height;
+            border-radius: 1px;
+            background: Theme.line.brighter(40%);
+        }
+        Rectangle {
+            width: 2px;
+            height: 7px;
+            y: parent.height - self.height;
+            border-radius: 1px;
+            background: Theme.line.brighter(40%);
+        }
+    }
+}
+
+component PowerButton inherits Rectangle {
+    in property <bool> checked;
+    in property <bool> enabled: true;
+    in property <bool> connecting: false;
+    callback clicked;
+    width: 50px;
+    height: 50px;
+    border-radius: 25px;
+    background: root.checked ? Theme.accent.darker(70%) : Theme.surface;
+    border-width: 2px;
+    border-color: root.connecting ? Theme.warn : root.checked ? Theme.accent : Theme.line;
+
+    VerticalLayout {
+        alignment: center;
+        spacing: 3px;
+        // Anel vetorial com corte no topo
+        HorizontalLayout {
+            alignment: center;
+            Rectangle {
+                width: 16px;
+                height: 16px;
+                border-width: 2px;
+                border-radius: 8px;
+                border-color: root.connecting ? Theme.warn : root.checked ? Theme.accent : Theme.dim;
+                background: transparent;
+                // Corte do topo
+                Rectangle {
+                    width: 4px;
+                    height: 4px;
+                    y: -1px;
+                    x: (parent.width - self.width) / 2;
+                    background: root.checked ? Theme.accent.darker(70%) : Theme.surface;
+                }
+                // Traço vertical central
+                Rectangle {
+                    width: 2px;
+                    height: 7px;
+                    y: -1px;
+                    x: (parent.width - self.width) / 2;
+                    background: root.connecting ? Theme.warn : root.checked ? Theme.accent : Theme.dim;
+                }
+            }
+        }
+        Text {
+            text: root.connecting ? "..." : root.checked ? "ON" : "OFF";
+            font-size: 9px;
+            font-weight: 700;
+            color: root.connecting ? Theme.warn : root.checked ? Theme.accent : Theme.faint;
+            horizontal-alignment: center;
+        }
+    }
+
+    TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
 }
 
 component Button inherits Rectangle {
     in property <string> text;
     in property <bool> primary: false;
+    in property <bool> danger: false;
     in property <bool> enabled: true;
     callback clicked;
-    height: 32px;
-    min-width: label.preferred-width + 24px;
-    border-radius: 6px;
+    height: 30px;
+    min-width: label.preferred-width + 20px;
+    border-radius: 5px;
     background: !root.enabled ? Theme.surface
+        : root.danger ? (ta.has-hover ? Theme.error.darker(20%) : Theme.error)
         : root.primary ? (ta.has-hover ? Theme.accent.brighter(10%) : Theme.accent)
         : (ta.has-hover ? Theme.hover : Theme.raised);
-    border-width: root.primary ? 0 : 1px;
+    border-width: root.primary || root.danger ? 0 : 1px;
     border-color: Theme.line;
     label := Text {
         text: root.text;
-        color: !root.enabled ? Theme.faint : root.primary ? Theme.on-accent : Theme.text;
-        font-size: 13px;
+        color: !root.enabled ? Theme.faint : (root.primary || root.danger) ? Theme.on-accent : Theme.text;
+        font-size: 12px;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -55,17 +208,17 @@ component Switch inherits Rectangle {
     in property <bool> checked;
     in property <bool> enabled: true;
     callback toggled;
-    width: 40px;
-    height: 22px;
-    border-radius: 11px;
+    width: 38px;
+    height: 20px;
+    border-radius: 10px;
     background: root.checked ? Theme.accent : Theme.raised;
     border-width: root.checked ? 0 : 1px;
     border-color: Theme.line;
     opacity: root.enabled ? 1 : 0.5;
     Rectangle {
-        width: 16px;
-        height: 16px;
-        border-radius: 8px;
+        width: 14px;
+        height: 14px;
+        border-radius: 7px;
         y: 3px;
         x: root.checked ? parent.width - self.width - 3px : 3px;
         background: root.checked ? Theme.on-accent : Theme.dim;
@@ -104,7 +257,7 @@ component Segmented inherits Rectangle {
                 mouse-cursor: pointer;
                 clicked => { root.picked(i); }
             }
-            min-width: 64px;
+            min-width: 60px;
         }
     }
 }
@@ -119,7 +272,7 @@ component SectionLabel inherits Text {
 component Row inherits Rectangle {
     in property <string> title;
     in property <string> hint;
-    min-height: 44px;
+    min-height: 42px;
     vertical-stretch: 0;
     HorizontalLayout {
         spacing: 12px;
@@ -143,12 +296,125 @@ component Divider inherits Rectangle {
     background: Theme.line;
 }
 
+component Menu inherits Rectangle {
+    height: vl.preferred-height;
+    background: Theme.surface;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: Theme.line;
+    vl := VerticalLayout {
+        padding: 4px;
+        spacing: 2px;
+        @children
+    }
+}
+
+component MenuItem inherits Rectangle {
+    in property <string> text;
+    in property <bool> danger: false;
+    callback clicked;
+    height: 28px;
+    border-radius: 4px;
+    background: ta.has-hover ? Theme.hover : transparent;
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        Text {
+            text: root.text;
+            font-size: 12px;
+            color: root.danger ? Theme.error : Theme.text;
+            vertical-alignment: center;
+        }
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+component Field inherits VerticalLayout {
+    in property <string> label;
+    spacing: 4px;
+    Text { text: root.label; font-size: 11px; color: Theme.dim; }
+    @children
+}
+
+// In-window modal: dims the window, swallows clicks behind it, Esc cancels.
+component Dialog inherits Rectangle {
+    in property <string> title;
+    in property <string> error;
+    in property <string> accept-text;
+    in property <bool> accept-enabled: true;
+    in property <bool> danger: false;
+    // Dialogs without a text field take the focus themselves so Esc works.
+    in property <bool> focus-self: false;
+    callback accepted;
+    callback cancelled;
+    background: #000000b0;
+
+    TouchArea { }
+    fs := FocusScope {
+        init => { if root.focus-self { self.focus(); } }
+        key-pressed(e) => {
+            if e.text == Key.Escape {
+                root.cancelled();
+                return accept;
+            }
+            reject
+        }
+        card := Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: min(310px, root.width - 24px);
+            height: vl.preferred-height;
+            background: Theme.surface;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: Theme.line;
+            vl := VerticalLayout {
+                padding: 16px;
+                spacing: 12px;
+                Text {
+                    text: root.title;
+                    color: Theme.text;
+                    font-size: 15px;
+                    font-weight: 600;
+                    wrap: word-wrap;
+                }
+                @children
+                if root.error != "": Text {
+                    text: root.error;
+                    color: Theme.error;
+                    font-size: 11px;
+                    wrap: word-wrap;
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: end;
+                    Button {
+                        text: @tr("Cancel");
+                        clicked => { root.cancelled(); }
+                    }
+                    Button {
+                        text: root.accept-text;
+                        primary: !root.danger;
+                        danger: root.danger;
+                        enabled: root.accept-enabled;
+                        clicked => { root.accepted(); }
+                    }
+                }
+            }
+        }
+    }
+}
+
 export component AppWindow inherits Window {
-    title: "Radmin VPN";
-    preferred-width: 400px;
-    preferred-height: 560px;
-    min-width: 340px;
-    min-height: 420px;
+    title: "Linmin VPN";
+    icon: @image-url("../data/linmin-vpn.png");
+    preferred-width: 330px;
+    preferred-height: 500px;
+    min-width: 280px;
+    min-height: 400px;
     background: Theme.bg;
     default-font-size: 13px;
 
@@ -160,17 +426,55 @@ export component AppWindow inherits Window {
     in property <[NetInfo]> networks;
     in property <string> self-alias;
     in property <string> toast;
+    in property <bool> toast-error;
 
-    // Pending leave confirmation.
+    // Menus superiores
+    in-out property <bool> show-menu-system: false;
+    in-out property <bool> show-menu-network: false;
+
+    // Menus de contexto (botão direito)
+    in-out property <bool> show-context-peer: false;
+    in-out property <bool> show-context-net: false;
+    in-out property <bool> show-context-empty: false;
+    in-out property <length> context-x: 0px;
+    in-out property <length> context-y: 0px;
+    in-out property <string> selected-peer-alias: "";
+    in-out property <string> selected-peer-ip: "";
+    in-out property <string> selected-peer-id: "";
+    in-out property <bool> selected-peer-applicant: false;
+    in-out property <string> selected-peer-net-id: "";
+    in-out property <string> selected-net-id: "";
+    in-out property <string> selected-net-name: "";
+    in-out property <bool> selected-net-can-delete: true;
+    in-out property <bool> selected-net-last-admin: false;
+    in-out property <bool> selected-net-allow-without-password: false;
+    in-out property <bool> selected-net-block-new-members: false;
+
+    // Diálogos modais
+    in-out property <bool> show-create-dialog: false;
+    in-out property <bool> show-join-dialog: false;
+    in-out property <bool> show-leave-dialog: false;
+    in-out property <bool> show-delete-dialog: false;
+    in-out property <bool> show-rename-dialog: false;
+    in-out property <bool> show-props-dialog: false;
+
+    // Campos dos diálogos
     in-out property <string> pending-net-id;
     in-out property <string> pending-net-name;
-
-    // Create / join network dialog fields.
     in-out property <string> create-net-name;
     in-out property <string> create-net-pw;
     in-out property <string> create-net-pw-confirm;
+    in-out property <bool> create-allow-without-password: false;
     in-out property <string> join-net-name;
     in-out property <string> join-net-pw;
+    in-out property <string> rename-alias-text;
+    in-out property <string> props-net-id;
+    in-out property <string> props-net-name;
+    in-out property <bool> props-allow-without-password: false;
+    in-out property <bool> props-block-new-members: false;
+    in-out property <bool> props-change-pw: false;
+    in-out property <string> props-new-pw;
+    in-out property <string> props-new-pw-confirm;
 
     // Setup
     in property <bool> has-appimage;
@@ -191,11 +495,17 @@ export component AppWindow inherits Window {
 
     callback toggle-vpn;
     callback open-radmin;
-    callback create-network(string, string);
-    callback join-network(string, string);
+    callback create-network(string, string, bool) -> bool;
+    callback join-network(string, string) -> bool;
+    callback update-network(string, string, bool, bool, string) -> bool;
     callback leave-network(string);
-    callback rename-self(string);
+    callback delete-network(string);
+    callback rename-self(string) -> bool;
     callback copy(string);
+    callback toggle-network(string);
+    callback ping-peer(string);
+    // (network id, node id)
+    callback approve-join(string, string);
     callback download;
     callback install-helper;
     callback remove-helper;
@@ -204,54 +514,180 @@ export component AppWindow inherits Window {
     callback set-autostart(bool);
     callback set-connect-on-login(bool);
     callback open-log;
+    callback quit-app;
+
+    // Error shown inside the open dialog (set by Rust when it rejects the input).
+    in-out property <string> dialog-error;
+
+    // Same rules the Rust side enforces, so a dialog never closes on bad input.
+    property <bool> create-valid: root.create-net-name != "" &&
+        (root.create-allow-without-password
+            ? (root.create-net-pw == "" || (root.create-net-pw.character-count >= 6 && root.create-net-pw == root.create-net-pw-confirm))
+            : (root.create-net-pw.character-count >= 6 && root.create-net-pw == root.create-net-pw-confirm));
+    property <bool> join-valid: root.join-net-name != "";
+    property <bool> rename-valid: root.rename-alias-text != "" && root.rename-alias-text != root.self-alias;
+    property <bool> props-valid: root.props-net-name != "" &&
+        (!root.props-change-pw || (root.props-new-pw.character-count >= 6 && root.props-new-pw == root.props-new-pw-confirm));
+
+    function close-dialogs() {
+        root.show-create-dialog = false;
+        root.show-join-dialog = false;
+        root.show-leave-dialog = false;
+        root.show-delete-dialog = false;
+        root.show-rename-dialog = false;
+        root.show-props-dialog = false;
+        root.dialog-error = "";
+    }
+    function open-create-dialog() {
+        root.create-net-name = "";
+        root.create-net-pw = "";
+        root.create-net-pw-confirm = "";
+        root.create-allow-without-password = false;
+        root.show-create-dialog = true;
+    }
+    function open-join-dialog() {
+        root.join-net-name = "";
+        root.join-net-pw = "";
+        root.show-join-dialog = true;
+    }
+    function open-props-dialog(id: string, name: string, allow_without_password: bool, block_new_members: bool) {
+        root.props-net-id = id;
+        root.props-net-name = name;
+        root.props-allow-without-password = allow_without_password;
+        root.props-block-new-members = block_new_members;
+        root.props-change-pw = false;
+        root.props-new-pw = "";
+        root.props-new-pw-confirm = "";
+        root.show-props-dialog = true;
+    }
+    function submit-create() {
+        if root.create-valid && root.create-network(root.create-net-name, root.create-net-pw, root.create-allow-without-password) {
+            root.close-dialogs();
+        }
+    }
+    function submit-join() {
+        if root.join-valid && root.join-network(root.join-net-name, root.join-net-pw) {
+            root.close-dialogs();
+        }
+    }
+    function submit-rename() {
+        if root.rename-valid && root.rename-self(root.rename-alias-text) {
+            root.close-dialogs();
+        }
+    }
+    function submit-props() {
+        if root.props-valid && root.update-network(
+            root.props-net-id,
+            root.props-net-name,
+            root.props-allow-without-password,
+            root.props-block-new-members,
+            root.props-change-pw ? root.props-new-pw : ""
+        ) {
+            root.close-dialogs();
+        }
+    }
+
+    // Fecha todos os menus abertos
+    function close-menus() {
+        root.show-menu-system = false;
+        root.show-menu-network = false;
+        root.show-context-peer = false;
+        root.show-context-net = false;
+        root.show-context-empty = false;
+    }
 
     VerticalLayout {
-        padding: 20px;
-        spacing: 16px;
+        padding-left: 14px;
+        padding-right: 14px;
+        padding-top: 10px;
+        padding-bottom: 12px;
+        spacing: 12px;
 
-        // Header ---------------------------------------------------------
+        // Top Menu Bar -----------------------------------------------------
         HorizontalLayout {
-            spacing: 12px;
-            VerticalLayout {
-                spacing: 2px;
-                horizontal-stretch: 1;
-                Text {
-                    text: root.show-settings ? @tr("Settings") : "Radmin VPN";
-                    font-size: 18px;
-                    font-weight: 600;
-                    color: Theme.text;
+            alignment: space-between;
+            height: 22px;
+            if !root.show-settings: HorizontalLayout {
+                spacing: 14px;
+                Rectangle {
+                    HorizontalLayout {
+                        padding-left: 2px;
+                        padding-right: 2px;
+                        Text {
+                            text: @tr("System");
+                            font-size: 12px;
+                            color: m-sys-ta.has-hover || root.show-menu-system ? Theme.text : Theme.dim;
+                            vertical-alignment: center;
+                        }
+                    }
+                    m-sys-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            if root.show-menu-system {
+                                root.close-menus();
+                            } else {
+                                root.close-menus();
+                                root.context-x = self.absolute-position.x;
+                                root.context-y = self.absolute-position.y + self.height + 4px;
+                                root.show-menu-system = true;
+                            }
+                        }
+                    }
                 }
-                if !root.show-settings: Text {
-                    text: root.phase == 0 ? @tr("Off")
-                        : root.phase == 1 ? (root.phase-detail != "" ? root.phase-detail : @tr("Connecting…"))
-                        : root.phase == 2 ? @tr("Connected")
-                        : root.phase == 3 ? @tr("Turning off…")
-                        : (root.phase-detail != "" ? root.phase-detail : @tr("Stopped unexpectedly"));
-                    color: root.phase == 4 ? Theme.error : Theme.dim;
-                    font-size: 12px;
-                    wrap: word-wrap;
+                Rectangle {
+                    HorizontalLayout {
+                        padding-left: 2px;
+                        padding-right: 2px;
+                        Text {
+                            text: @tr("Network");
+                            font-size: 12px;
+                            color: m-net-ta.has-hover || root.show-menu-network ? Theme.text : Theme.dim;
+                            vertical-alignment: center;
+                        }
+                    }
+                    m-net-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            if root.show-menu-network {
+                                root.close-menus();
+                            } else {
+                                root.close-menus();
+                                root.context-x = self.absolute-position.x;
+                                root.context-y = self.absolute-position.y + self.height + 4px;
+                                root.show-menu-network = true;
+                            }
+                        }
+                    }
                 }
             }
-            if !root.show-settings: VerticalLayout {
-                alignment: center;
-                Switch {
-                    checked: root.phase == 1 || root.phase == 2;
-                    enabled: root.has-appimage && root.phase != 3;
-                    toggled => { root.toggle-vpn(); }
-                }
+            if root.show-settings: Text {
+                text: @tr("Settings");
+                font-size: 13px;
+                font-weight: 600;
+                color: Theme.text;
+                vertical-alignment: center;
             }
-            VerticalLayout {
-                alignment: center;
-                Button {
-                    text: root.show-settings ? @tr("Back") : @tr("Settings");
-                    clicked => { root.show-settings = !root.show-settings; }
+            if root.show-settings: Rectangle {
+                HorizontalLayout {
+                    padding-left: 6px;
+                    padding-right: 6px;
+                    Text {
+                        text: @tr("Back");
+                        font-size: 12px;
+                        color: Theme.accent;
+                        vertical-alignment: center;
+                    }
+                }
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.show-settings = false; }
                 }
             }
         }
 
-        // Main page --------------------------------------------------------
+        // Main Page --------------------------------------------------------
         if !root.show-settings: VerticalLayout {
-            spacing: 16px;
+            spacing: 12px;
             vertical-stretch: 1;
 
             if !root.has-appimage: VerticalLayout {
@@ -291,180 +727,325 @@ export component AppWindow inherits Window {
                 }
             }
 
-            if root.has-appimage && root.helper-state != 2: VerticalLayout {
-                spacing: 8px;
+            // Identity Header Card (Power Button + Name + IP + Status Pill)
+            if root.has-appimage: Rectangle {
                 vertical-stretch: 0;
-                Text {
-                    text: root.helper-state == 0
-                        ? @tr("Each start asks for the administrator password.")
-                        : @tr("The password-free access is from an older version.");
-                    color: Theme.text;
-                    wrap: word-wrap;
-                }
-                Text {
-                    text: @tr("Allow it once and the VPN will only configure its own network interface, without asking again.");
-                    color: Theme.dim;
-                    font-size: 12px;
-                    wrap: word-wrap;
-                }
+                background: Theme.surface;
+                border-radius: 6px;
+                border-width: 1px;
+                border-color: Theme.line;
                 HorizontalLayout {
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    padding-top: 10px;
+                    padding-bottom: 10px;
+                    spacing: 12px;
                     alignment: start;
-                    Button {
-                        text: root.helper-state == 0 ? @tr("Allow without password") : @tr("Update");
-                        enabled: !root.busy;
-                        clicked => { root.install-helper(); }
-                    }
-                }
-            }
-
-            if root.has-appimage: VerticalLayout {
-                spacing: 6px;
-                vertical-stretch: 0;
-                SectionLabel { text: @tr("YOUR ADDRESS"); }
-                HorizontalLayout {
-                    spacing: 10px;
-                    Text {
-                        text: root.ip != "" ? root.ip : "—";
-                        font-size: 22px;
-                        font-family: "monospace";
-                        color: root.ip != "" ? Theme.text : Theme.faint;
-                        vertical-alignment: center;
-                        horizontal-stretch: 1;
-                    }
-                    if root.ip != "": VerticalLayout {
+                    VerticalLayout {
                         alignment: center;
-                        Button {
-                            text: @tr("Copy");
-                            clicked => { root.copy(root.ip); }
+                        PowerButton {
+                            checked: root.phase == 2;
+                            connecting: root.phase == 1;
+                            enabled: root.has-appimage && root.phase != 3;
+                            clicked => { root.toggle-vpn(); }
                         }
                     }
-                }
-                if root.phase == 2: HorizontalLayout {
-                    spacing: 8px;
-                    name-edit := LineEdit {
-                        text: root.self-alias;
-                        placeholder-text: @tr("Your name on the network");
-                        horizontal-stretch: 1;
-                        accepted => { root.rename-self(self.text); }
-                    }
-                    Button {
-                        text: @tr("Rename");
-                        enabled: name-edit.text != "" && name-edit.text != root.self-alias;
-                        clicked => { root.rename-self(name-edit.text); }
-                    }
-                }
-            }
-
-            if root.has-appimage: VerticalLayout {
-                spacing: 6px;
-                vertical-stretch: root.networks.length > 0 ? 1 : 0;
-                SectionLabel {
-                    vertical-stretch: 0;
-                    text: @tr("NETWORKS") + (root.networks.length > 0 ? "  " + root.networks.length : "");
-                }
-                if root.networks.length == 0: Text {
-                    vertical-stretch: 0;
-                    text: root.phase == 2
-                        ? @tr("No networks yet. Create or join one below.")
-                        : @tr("Turn the VPN on to see your networks.");
-                    color: Theme.dim;
-                    font-size: 12px;
-                    wrap: word-wrap;
-                }
-                if root.networks.length > 0: ScrollView {
-                    vertical-stretch: 1;
                     VerticalLayout {
-                        spacing: 10px;
-                        for net in root.networks: VerticalLayout {
-                            spacing: 2px;
-                            // Network header: name, member count and Leave.
-                            HorizontalLayout {
-                                spacing: 8px;
-                                padding-left: 4px;
-                                Text {
-                                    text: net.name + "  ·  " + net.members;
-                                    color: Theme.text;
-                                    font-size: 13px;
-                                    font-weight: 600;
-                                    vertical-alignment: center;
-                                    horizontal-stretch: 1;
+                        alignment: center;
+                        spacing: 2px;
+                        horizontal-stretch: 1;
+                        Text {
+                            text: root.self-alias != "" ? root.self-alias : @tr("Your machine");
+                            font-size: 14px;
+                            font-weight: 600;
+                            color: Theme.text;
+                            vertical-alignment: center;
+                        }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            Text {
+                                text: root.ip != "" ? root.ip : "—";
+                                font-size: 13px;
+                                font-family: "monospace";
+                                color: root.ip != "" ? Theme.text : Theme.faint;
+                                vertical-alignment: center;
+                            }
+                            if root.ip != "": Rectangle {
+                                border-radius: 3px;
+                                background: cta.has-hover ? Theme.hover : transparent;
+                                height: 16px;
+                                HorizontalLayout {
+                                    padding-left: 4px;
+                                    padding-right: 4px;
+                                    Text {
+                                        text: @tr("copy");
+                                        font-size: 10px;
+                                        color: Theme.dim;
+                                        vertical-alignment: center;
+                                    }
                                 }
-                                if net.id != "": Button {
-                                    text: @tr("Leave");
-                                    enabled: root.phase == 2;
-                                    clicked => {
-                                        root.pending-net-id = net.id;
-                                        root.pending-net-name = net.name;
-                                        confirm-leave.show();
+                                cta := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { root.copy(root.ip); }
+                                }
+                            }
+                        }
+                        HorizontalLayout {
+                            alignment: start;
+                            Rectangle {
+                                border-radius: 4px;
+                                background: root.phase == 2 ? Theme.accent.darker(70%) : root.phase == 1 ? Theme.warn.darker(70%) : Theme.raised;
+                                border-width: 1px;
+                                border-color: root.phase == 2 ? Theme.accent : root.phase == 1 ? Theme.warn : Theme.line;
+                                height: 18px;
+                                HorizontalLayout {
+                                    padding-left: 6px;
+                                    padding-right: 6px;
+                                    Text {
+                                        text: root.phase == 2 ? @tr("Online")
+                                            : root.phase == 1 ? (root.phase-detail != "" ? root.phase-detail : @tr("Connecting…"))
+                                            : root.phase == 3 ? @tr("Turning off…")
+                                            : (root.phase-detail != "" ? root.phase-detail : @tr("Offline"));
+                                        font-size: 10px;
+                                        font-weight: 600;
+                                        color: root.phase == 2 ? Theme.accent : root.phase == 1 ? Theme.warn : Theme.dim;
+                                        vertical-alignment: center;
+                                        horizontal-alignment: center;
                                     }
                                 }
                             }
-                            for peer in net.peers: Rectangle {
-                                height: 30px;
-                                border-radius: 4px;
-                                background: pta.has-hover ? Theme.hover : transparent;
+                        }
+                    }
+                }
+            }
+
+            // Networks Section
+            if root.has-appimage: VerticalLayout {
+                spacing: 6px;
+                vertical-stretch: 1;
+
+                SectionLabel {
+                    text: @tr("NETWORKS") + (root.networks.length > 0 ? "  (" + root.networks.length + ")" : "");
+                }
+
+                // Lista de Redes com fundo para clique direito vazio
+                Rectangle {
+                    vertical-stretch: 1;
+                    background: transparent;
+
+                    // Clique direito na área vazia da lista abre menu de criar/entrar
+                    empty-ta := TouchArea {
+                        pointer-event(pe) => {
+                            if pe.button == PointerEventButton.right && pe.kind == PointerEventKind.down {
+                                root.close-menus();
+                                root.context-x = self.absolute-position.x + self.mouse-x;
+                                root.context-y = self.absolute-position.y + self.mouse-y;
+                                root.show-context-empty = true;
+                            }
+                        }
+                    }
+
+                    if root.networks.length == 0: VerticalLayout {
+                        alignment: center;
+                        spacing: 8px;
+                        Text {
+                            text: root.phase == 2
+                                ? @tr("No networks yet. Create or join one below.")
+                                : @tr("Turn the VPN on to see your networks.");
+                            color: Theme.dim;
+                            font-size: 12px;
+                            horizontal-alignment: center;
+                            wrap: word-wrap;
+                        }
+                        if root.phase == 2: HorizontalLayout {
+                            alignment: center;
+                            spacing: 14px;
+                            Rectangle {
+                                height: 24px;
                                 HorizontalLayout {
-                                    padding-left: 12px;
+                                    padding-left: 8px;
                                     padding-right: 8px;
                                     Text {
-                                        text: peer;
-                                        color: Theme.text;
-                                        vertical-alignment: center;
-                                        horizontal-stretch: 1;
-                                    }
-                                    Text {
-                                        text: pta.has-hover ? @tr("copy") : "";
-                                        color: Theme.faint;
-                                        font-size: 11px;
+                                        text: @tr("Create network");
+                                        color: Theme.accent;
+                                        font-size: 12px;
                                         vertical-alignment: center;
                                     }
                                 }
-                                pta := TouchArea {
+                                TouchArea {
                                     mouse-cursor: pointer;
-                                    clicked => { root.copy(peer); }
+                                    clicked => {
+                                        root.open-create-dialog();
+                                    }
+                                }
+                            }
+                            Rectangle {
+                                height: 24px;
+                                HorizontalLayout {
+                                    padding-left: 8px;
+                                    padding-right: 8px;
+                                    Text {
+                                        text: @tr("Join network");
+                                        color: Theme.accent;
+                                        font-size: 12px;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                                TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        root.open-join-dialog();
+                                    }
                                 }
                             }
                         }
                     }
-                }
-            }
 
-            // Keeps the footer at the bottom when the list is short.
-            if !root.has-appimage || root.networks.length == 0: Rectangle { vertical-stretch: 1; }
-            if root.has-appimage: HorizontalLayout {
-                spacing: 8px;
-                vertical-stretch: 0;
-                Button {
-                    text: @tr("Create network");
-                    enabled: root.phase == 2;
-                    clicked => {
-                        root.create-net-name = "";
-                        root.create-net-pw = "";
-                        root.create-net-pw-confirm = "";
-                        create-dialog.show();
+                    if root.networks.length > 0: ScrollView {
+                        vertical-stretch: 1;
+                        VerticalLayout {
+                            spacing: 6px;
+                            for net in root.networks: VerticalLayout {
+                                spacing: 1px;
+
+                                // Faixa de cabeçalho da rede (sóbria, com botão direito de contexto)
+                                Rectangle {
+                                    height: 26px;
+                                    border-radius: 4px;
+                                    background: nta.has-hover ? Theme.hover : Theme.raised;
+                                    border-width: 1px;
+                                    border-color: Theme.line;
+
+                                    HorizontalLayout {
+                                        padding-left: 8px;
+                                        padding-right: 8px;
+                                        spacing: 8px;
+                                        Text {
+                                            text: net.collapsed ? "▶" : "▼";
+                                            color: Theme.dim;
+                                            font-size: 8px;
+                                            width: 8px;
+                                            vertical-alignment: center;
+                                        }
+                                        Text {
+                                            text: net.name;
+                                            color: Theme.text;
+                                            font-size: 12px;
+                                            font-weight: 600;
+                                            vertical-alignment: center;
+                                            horizontal-stretch: 1;
+                                        }
+                                        Text {
+                                            text: net.online + "/" + net.total;
+                                            color: Theme.dim;
+                                            font-size: 11px;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+
+                                    nta := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => { root.toggle-network(net.id); }
+                                        pointer-event(pe) => {
+                                            if pe.button == PointerEventButton.right && pe.kind == PointerEventKind.down {
+                                                root.close-menus();
+                                                root.selected-net-id = net.id;
+                                                root.selected-net-name = net.name;
+                                                root.selected-net-allow-without-password = net.allow-without-password;
+                                                root.selected-net-block-new-members = net.block-new-members;
+                                                root.selected-net-can-delete = net.can-delete;
+                                                root.selected-net-last-admin = net.last-admin;
+                                                root.context-x = self.absolute-position.x + self.mouse-x;
+                                                root.context-y = self.absolute-position.y + self.mouse-y;
+                                                root.show-context-net = true;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Linhas de peers
+                                if !net.collapsed: VerticalLayout {
+                                    spacing: 1px;
+                                    for peer in net.peers: Rectangle {
+                                        height: 26px;
+                                        border-radius: 4px;
+                                        background: pta.has-hover ? Theme.hover : transparent;
+
+                                        HorizontalLayout {
+                                            padding-left: 12px;
+                                            padding-right: 8px;
+                                            spacing: 8px;
+
+                                            VerticalLayout {
+                                                alignment: center;
+                                                if peer.online: SignalBars {
+                                                    online: true;
+                                                }
+                                                if !peer.online: OfflineIcon { }
+                                            }
+
+                                            Text {
+                                                text: peer.alias;
+                                                color: peer.online ? Theme.text : Theme.dim;
+                                                font-size: 12px;
+                                                vertical-alignment: center;
+                                                horizontal-stretch: 1;
+                                                min-width: 0px;
+                                                overflow: elide;
+                                            }
+
+                                            if peer.applicant: Text {
+                                                text: @tr("pending");
+                                                color: Theme.accent;
+                                                font-size: 11px;
+                                                vertical-alignment: center;
+                                            }
+
+                                            if !peer.applicant && peer.online && peer.latency != "": Text {
+                                                text: peer.latency;
+                                                color: Theme.faint;
+                                                font-size: 11px;
+                                                vertical-alignment: center;
+                                            }
+
+                                            Text {
+                                                text: peer.ip;
+                                                color: peer.online ? Theme.dim : Theme.faint;
+                                                font-family: "monospace";
+                                                font-size: 12px;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+
+                                        pta := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => {
+                                                root.copy(peer.ip);
+                                            }
+                                            pointer-event(pe) => {
+                                                if pe.button == PointerEventButton.right && pe.kind == PointerEventKind.down {
+                                                    root.close-menus();
+                                                    root.selected-peer-alias = peer.alias;
+                                                    root.selected-peer-ip = peer.ip;
+                                                    root.selected-peer-id = peer.id;
+                                                    root.selected-peer-applicant = peer.applicant;
+                                                    root.selected-peer-net-id = net.id;
+                                                    root.context-x = self.absolute-position.x + self.mouse-x;
+                                                    root.context-y = self.absolute-position.y + self.mouse-y;
+                                                    root.show-context-peer = true;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
-                }
-                Button {
-                    text: @tr("Join network");
-                    enabled: root.phase == 2;
-                    clicked => {
-                        root.join-net-name = "";
-                        root.join-net-pw = "";
-                        join-dialog.show();
-                    }
-                }
-                Text {
-                    text: root.toast;
-                    color: Theme.dim;
-                    font-size: 12px;
-                    vertical-alignment: center;
-                    horizontal-stretch: 1;
-                    horizontal-alignment: right;
                 }
             }
         }
 
-        // Settings page ----------------------------------------------------
+        // Settings Page ----------------------------------------------------
         if root.show-settings: ScrollView {
             vertical-stretch: 1;
             VerticalLayout {
@@ -543,172 +1124,414 @@ export component AppWindow inherits Window {
         }
     }
 
-    create-dialog := PopupWindow {
-        x: (root.width - 320px) / 2;
-        y: (root.height - 290px) / 2;
-        width: 320px;
-        Rectangle {
-            background: Theme.surface;
-            border-radius: 8px;
-            border-width: 1px;
-            border-color: Theme.line;
-            VerticalLayout {
-                padding: 16px;
-                spacing: 12px;
-                Text {
-                    text: @tr("Create network");
-                    color: Theme.text;
-                    font-size: 14px;
-                    font-weight: 600;
+    // Short status message over the bottom of the window; it floats so the
+    // list never jumps when a message comes and goes.
+    if root.toast != "": Rectangle {
+        x: 14px;
+        y: root.height - self.height - 12px;
+        width: root.width - 28px;
+        height: 28px;
+        background: Theme.raised;
+        border-radius: 5px;
+        border-width: 1px;
+        border-color: root.toast-error ? Theme.error : Theme.line;
+        HorizontalLayout {
+            padding-left: 10px;
+            padding-right: 10px;
+            Text {
+                text: root.toast;
+                color: root.toast-error ? Theme.error : Theme.text;
+                font-size: 11px;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+    }
+
+    // Backdrop global para fechar menus ao clicar fora
+    if root.show-menu-system || root.show-menu-network || root.show-context-peer || root.show-context-net || root.show-context-empty: Rectangle {
+        background: transparent;
+        TouchArea {
+            clicked => { root.close-menus(); }
+            pointer-event(pe) => {
+                if pe.button == PointerEventButton.right && pe.kind == PointerEventKind.down {
+                    root.close-menus();
                 }
-                VerticalLayout {
-                    spacing: 4px;
-                    Text { text: @tr("Network name"); font-size: 11px; color: Theme.dim; }
-                    LineEdit {
-                        text <=> root.create-net-name;
-                        placeholder-text: @tr("Network name");
-                    }
+            }
+        }
+
+        // Top Dropdown Menu: Sistema
+        if root.show-menu-system: Menu {
+            x: max(4px, min(root.context-x, root.width - self.width - 4px));
+            y: max(4px, min(root.context-y, root.height - self.height - 4px));
+            width: 140px;
+            MenuItem {
+                text: @tr("Change name…");
+                clicked => {
+                    root.close-menus();
+                    root.rename-alias-text = root.self-alias;
+                    root.show-rename-dialog = true;
                 }
-                VerticalLayout {
-                    spacing: 4px;
-                    Text { text: @tr("Password"); font-size: 11px; color: Theme.dim; }
-                    LineEdit {
-                        text <=> root.create-net-pw;
-                        input-type: password;
-                        placeholder-text: @tr("At least 6 characters");
-                    }
+            }
+            MenuItem {
+                text: @tr("Settings");
+                clicked => {
+                    root.close-menus();
+                    root.show-settings = true;
                 }
-                VerticalLayout {
-                    spacing: 4px;
-                    Text { text: @tr("Confirm password"); font-size: 11px; color: Theme.dim; }
-                    LineEdit {
-                        text <=> root.create-net-pw-confirm;
-                        input-type: password;
-                    }
+            }
+            Divider { }
+            MenuItem {
+                text: @tr("Exit");
+                clicked => {
+                    root.close-menus();
+                    root.quit-app();
                 }
-                if root.create-net-pw-confirm != "" && root.create-net-pw != root.create-net-pw-confirm: Text {
-                    text: @tr("Passwords do not match");
-                    color: Theme.error;
-                    font-size: 11px;
+            }
+        }
+
+        // Top Dropdown Menu: Rede
+        if root.show-menu-network: Menu {
+            x: max(4px, min(root.context-x, root.width - self.width - 4px));
+            y: max(4px, min(root.context-y, root.height - self.height - 4px));
+            width: 160px;
+            MenuItem {
+                text: @tr("Create network…");
+                clicked => {
+                    root.close-menus();
+                    root.open-create-dialog();
                 }
-                HorizontalLayout {
-                    spacing: 8px;
-                    alignment: end;
-                    Button {
-                        text: @tr("Cancel");
-                        clicked => { create-dialog.close(); }
-                    }
-                    Button {
-                        text: @tr("Create");
-                        primary: true;
-                        enabled: root.create-net-name != "" && root.create-net-pw != "" && root.create-net-pw == root.create-net-pw-confirm;
-                        clicked => {
-                            root.create-network(root.create-net-name, root.create-net-pw);
-                            create-dialog.close();
-                        }
-                    }
+            }
+            MenuItem {
+                text: @tr("Join network…");
+                clicked => {
+                    root.close-menus();
+                    root.open-join-dialog();
+                }
+            }
+        }
+
+        // Context Menu: Peer (clique direito no nó)
+        if root.show-context-peer: Menu {
+            x: max(4px, min(root.context-x + self.width > root.width - 4px ? root.context-x - self.width : root.context-x, root.width - self.width - 4px));
+            y: max(4px, min(root.context-y + self.height > root.height - 4px ? root.context-y - self.height : root.context-y, root.height - self.height - 4px));
+            width: 150px;
+            if root.selected-peer-applicant: MenuItem {
+                text: @tr("Approve joining");
+                clicked => {
+                    root.approve-join(root.selected-peer-net-id, root.selected-peer-id);
+                    root.close-menus();
+                }
+            }
+            if root.selected-peer-applicant: Divider { }
+            MenuItem {
+                text: @tr("Copy IP address");
+                clicked => {
+                    root.copy(root.selected-peer-ip);
+                    root.close-menus();
+                }
+            }
+            MenuItem {
+                text: @tr("Copy name");
+                clicked => {
+                    root.copy(root.selected-peer-alias);
+                    root.close-menus();
+                }
+            }
+            Divider { }
+            MenuItem {
+                text: @tr("Ping");
+                clicked => {
+                    root.ping-peer(root.selected-peer-ip);
+                    root.close-menus();
+                }
+            }
+        }
+
+        // Context Menu: Rede (clique direito na faixa da sala)
+        if root.show-context-net: Menu {
+            x: max(4px, min(root.context-x + self.width > root.width - 4px ? root.context-x - self.width : root.context-x, root.width - self.width - 4px));
+            y: max(4px, min(root.context-y + self.height > root.height - 4px ? root.context-y - self.height : root.context-y, root.height - self.height - 4px));
+            width: 175px;
+            MenuItem {
+                text: @tr("Network properties…");
+                clicked => {
+                    root.open-props-dialog(root.selected-net-id, root.selected-net-name, root.selected-net-allow-without-password, root.selected-net-block-new-members);
+                    root.close-menus();
+                }
+            }
+            MenuItem {
+                text: @tr("Copy network name");
+                clicked => {
+                    root.copy(root.selected-net-name);
+                    root.close-menus();
+                }
+            }
+            Divider { }
+            if !root.selected-net-last-admin: MenuItem {
+                text: @tr("Leave network");
+                clicked => {
+                    root.pending-net-id = root.selected-net-id;
+                    root.pending-net-name = root.selected-net-name;
+                    root.close-menus();
+                    root.show-leave-dialog = true;
+                }
+            }
+            if root.selected-net-can-delete: MenuItem {
+                text: @tr("Delete network");
+                danger: true;
+                clicked => {
+                    root.pending-net-id = root.selected-net-id;
+                    root.pending-net-name = root.selected-net-name;
+                    root.close-menus();
+                    root.show-delete-dialog = true;
+                }
+            }
+        }
+
+        // Context Menu: Área Vazia da Lista
+        if root.show-context-empty: Menu {
+            x: max(4px, min(root.context-x + self.width > root.width - 4px ? root.context-x - self.width : root.context-x, root.width - self.width - 4px));
+            y: max(4px, min(root.context-y + self.height > root.height - 4px ? root.context-y - self.height : root.context-y, root.height - self.height - 4px));
+            width: 160px;
+            MenuItem {
+                text: @tr("Create network…");
+                clicked => {
+                    root.close-menus();
+                    root.open-create-dialog();
+                }
+            }
+            MenuItem {
+                text: @tr("Join network…");
+                clicked => {
+                    root.close-menus();
+                    root.open-join-dialog();
                 }
             }
         }
     }
 
-    join-dialog := PopupWindow {
-        x: (root.width - 320px) / 2;
-        y: (root.height - 220px) / 2;
-        width: 320px;
-        Rectangle {
-            background: Theme.surface;
-            border-radius: 8px;
-            border-width: 1px;
-            border-color: Theme.line;
-            VerticalLayout {
-                padding: 16px;
-                spacing: 12px;
-                Text {
-                    text: @tr("Join network");
-                    color: Theme.text;
-                    font-size: 14px;
-                    font-weight: 600;
-                }
-                VerticalLayout {
-                    spacing: 4px;
-                    Text { text: @tr("Network name"); font-size: 11px; color: Theme.dim; }
-                    LineEdit {
-                        text <=> root.join-net-name;
-                        placeholder-text: @tr("Network name");
-                    }
-                }
-                VerticalLayout {
-                    spacing: 4px;
-                    Text { text: @tr("Password"); font-size: 11px; color: Theme.dim; }
-                    LineEdit {
-                        text <=> root.join-net-pw;
-                        input-type: password;
-                    }
-                }
-                HorizontalLayout {
-                    spacing: 8px;
-                    alignment: end;
-                    Button {
-                        text: @tr("Cancel");
-                        clicked => { join-dialog.close(); }
-                    }
-                    Button {
-                        text: @tr("Join");
-                        primary: true;
-                        enabled: root.join-net-name != "" && root.join-net-pw != "";
-                        clicked => {
-                            root.join-network(root.join-net-name, root.join-net-pw);
-                            join-dialog.close();
-                        }
-                    }
-                }
+    // Modal dialogs. They close only when the action was accepted; on a
+    // validation error the dialog stays open with the message inside it.
+    if root.show-create-dialog: Dialog {
+        title: @tr("Create network");
+        error: root.dialog-error;
+        accept-text: @tr("Create");
+        accept-enabled: root.create-valid;
+        cancelled => { root.close-dialogs(); }
+        accepted => { root.submit-create(); }
+        Field {
+            label: @tr("Network name");
+            LineEdit {
+                height: 32px;
+                text <=> root.create-net-name;
+                init => { self.focus(); }
+                accepted => { root.submit-create(); }
+            }
+        }
+        HorizontalLayout {
+            spacing: 10px;
+            alignment: space-between;
+            Text {
+                text: @tr("Allow join requests without password");
+                color: Theme.text;
+                font-size: 12px;
+                vertical-alignment: center;
+            }
+            Switch {
+                checked: root.create-allow-without-password;
+                toggled => { root.create-allow-without-password = !root.create-allow-without-password; }
+            }
+        }
+        Field {
+            label: root.create-allow-without-password ? @tr("Password (optional)") : @tr("Password");
+            LineEdit {
+                height: 32px;
+                text <=> root.create-net-pw;
+                input-type: password;
+                placeholder-text: root.create-allow-without-password ? @tr("Optional (at least 6 characters)") : @tr("At least 6 characters");
+                accepted => { root.submit-create(); }
+            }
+        }
+        if root.create-net-pw != "" || !root.create-allow-without-password: Field {
+            label: @tr("Confirm password");
+            LineEdit {
+                height: 32px;
+                text <=> root.create-net-pw-confirm;
+                input-type: password;
+                accepted => { root.submit-create(); }
+            }
+        }
+        if root.create-net-pw-confirm != "" && root.create-net-pw != root.create-net-pw-confirm: Text {
+            text: @tr("Passwords do not match");
+            color: Theme.error;
+            font-size: 11px;
+        }
+    }
+
+    if root.show-join-dialog: Dialog {
+        title: @tr("Join network");
+        error: root.dialog-error;
+        accept-text: @tr("Join");
+        accept-enabled: root.join-valid;
+        cancelled => { root.close-dialogs(); }
+        accepted => { root.submit-join(); }
+        Field {
+            label: @tr("Network name");
+            LineEdit {
+                height: 32px;
+                text <=> root.join-net-name;
+                init => { self.focus(); }
+                accepted => { root.submit-join(); }
+            }
+        }
+        Field {
+            label: @tr("Password (blank asks the owner to approve)");
+            LineEdit {
+                height: 32px;
+                text <=> root.join-net-pw;
+                input-type: password;
+                placeholder-text: @tr("Password (if required)");
+                accepted => { root.submit-join(); }
             }
         }
     }
 
-    confirm-leave := PopupWindow {
-        x: (root.width - 300px) / 2;
-        y: (root.height - 150px) / 2;
-        width: 300px;
-        Rectangle {
-            background: Theme.surface;
-            border-radius: 8px;
-            border-width: 1px;
-            border-color: Theme.line;
-            VerticalLayout {
-                padding: 16px;
-                spacing: 12px;
-                Text {
-                    text: @tr("Leave “{}”?", root.pending-net-name);
-                    color: Theme.text;
-                    font-size: 14px;
-                    font-weight: 600;
-                    wrap: word-wrap;
-                }
-                Text {
-                    text: @tr("You will need the password to rejoin this network.");
-                    color: Theme.dim;
-                    font-size: 12px;
-                    wrap: word-wrap;
-                }
-                HorizontalLayout {
-                    spacing: 8px;
-                    alignment: end;
-                    Button {
-                        text: @tr("Cancel");
-                        clicked => { confirm-leave.close(); }
-                    }
-                    Button {
-                        text: @tr("Leave");
-                        primary: true;
-                        clicked => {
-                            root.leave-network(root.pending-net-id);
-                            confirm-leave.close();
-                        }
-                    }
-                }
+    if root.show-leave-dialog: Dialog {
+        title: @tr("Leave “{}”?", root.pending-net-name);
+        accept-text: @tr("Leave");
+        focus-self: true;
+        cancelled => { root.close-dialogs(); }
+        accepted => {
+            root.leave-network(root.pending-net-id);
+            root.close-dialogs();
+        }
+        Text {
+            text: @tr("You will need the password to rejoin this network.");
+            color: Theme.dim;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+    }
+
+    if root.show-delete-dialog: Dialog {
+        title: @tr("Delete “{}”?", root.pending-net-name);
+        accept-text: @tr("Delete");
+        danger: true;
+        focus-self: true;
+        cancelled => { root.close-dialogs(); }
+        accepted => {
+            root.delete-network(root.pending-net-id);
+            root.close-dialogs();
+        }
+        Text {
+            text: @tr("The network will be permanently deleted for all members.");
+            color: Theme.dim;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+    }
+
+    if root.show-rename-dialog: Dialog {
+        title: @tr("Change name");
+        error: root.dialog-error;
+        accept-text: @tr("Rename");
+        accept-enabled: root.rename-valid;
+        cancelled => { root.close-dialogs(); }
+        accepted => { root.submit-rename(); }
+        Field {
+            label: @tr("Your name on the network");
+            LineEdit {
+                height: 32px;
+                text <=> root.rename-alias-text;
+                init => { self.focus(); }
+                accepted => { root.submit-rename(); }
             }
+        }
+    }
+
+    if root.show-props-dialog: Dialog {
+        title: @tr("Network properties");
+        error: root.dialog-error;
+        accept-text: @tr("Save");
+        accept-enabled: root.props-valid;
+        cancelled => { root.close-dialogs(); }
+        accepted => { root.submit-props(); }
+        Field {
+            label: @tr("Network name");
+            LineEdit {
+                height: 32px;
+                text <=> root.props-net-name;
+                init => { self.focus(); }
+                accepted => { root.submit-props(); }
+            }
+        }
+        HorizontalLayout {
+            spacing: 10px;
+            alignment: space-between;
+            Text {
+                text: @tr("Allow join requests without password");
+                color: Theme.text;
+                font-size: 12px;
+                vertical-alignment: center;
+            }
+            Switch {
+                checked: root.props-allow-without-password;
+                toggled => { root.props-allow-without-password = !root.props-allow-without-password; }
+            }
+        }
+        HorizontalLayout {
+            spacing: 10px;
+            alignment: space-between;
+            Text {
+                text: @tr("Block new members");
+                color: Theme.text;
+                font-size: 12px;
+                vertical-alignment: center;
+            }
+            Switch {
+                checked: root.props-block-new-members;
+                toggled => { root.props-block-new-members = !root.props-block-new-members; }
+            }
+        }
+        Divider { }
+        HorizontalLayout {
+            spacing: 10px;
+            alignment: space-between;
+            Text {
+                text: @tr("Change password");
+                color: Theme.text;
+                font-size: 12px;
+                vertical-alignment: center;
+            }
+            Switch {
+                checked: root.props-change-pw;
+                toggled => { root.props-change-pw = !root.props-change-pw; }
+            }
+        }
+        if root.props-change-pw: Field {
+            label: @tr("New password");
+            LineEdit {
+                height: 32px;
+                text <=> root.props-new-pw;
+                input-type: password;
+                placeholder-text: @tr("At least 6 characters");
+                accepted => { root.submit-props(); }
+            }
+        }
+        if root.props-change-pw: Field {
+            label: @tr("Confirm new password");
+            LineEdit {
+                height: 32px;
+                text <=> root.props-new-pw-confirm;
+                input-type: password;
+                accepted => { root.submit-props(); }
+            }
+        }
+        if root.props-change-pw && root.props-new-pw-confirm != "" && root.props-new-pw != root.props-new-pw-confirm: Text {
+            text: @tr("Passwords do not match");
+            color: Theme.error;
+            font-size: 11px;
         }
     }
 }

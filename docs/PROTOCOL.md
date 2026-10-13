@@ -1,6 +1,6 @@
 # Radmin VPN GUI ⇄ service protocol (reverse engineered)
 
-Goal: talk to `RvControlSvc.exe` directly from radmin-wired so we never open the
+Goal: talk to `RvControlSvc.exe` directly from linmin-vpn so we never open the
 bundled Wine GUI (`RvRvpnGui.exe`), not even to join or leave a network.
 
 Everything here was recovered by proxying the real pipe and decoding the frames
@@ -69,20 +69,21 @@ They line up with the service's RTTI classes `ControlSvc::msg::cmd::C*`
 | code | name (from RTTI) | args container | fields seen |
 |---|---|---|---|
 | 2 | CreateNetwork | `132b` | `0308` bool, `0306` name (str), `030d` password blob |
-| 3 | JoinNetwork | `131b` | `033f` bool, `0306` name, `030d` password blob |
+| 3 | JoinNetwork | `131b` | `033f` bool (GUI "Gaming network" tab), `0306` name, `030d` password blob — omitted when joining without password (sends a join request an admin must approve) |
 | 4 | SwitchPower | — | `0311` bool (0 = off, 1 = on) |
 | 5 | LeaveNetwork | — | `0309` network GUID (16) |
-| 10 | (node action; GrantAdmin/Kick?) | — | `0309` network GUID, `01e1` node id |
+| 10 | ApproveJoin | — | `0309` network GUID, `01e1` node id (u64) — confirmed statically: `CApproveJoin` ctor passes 10 to the base command |
 | 14 | UpdateNetwork (properties) | `132a` | `0309` GUID, `0306` name, `0308`/`0323`/`031c` bool |
 | 15 | DeleteNetwork | — | `0309` network GUID |
 | 18 | ChangeAlias (rename self) | — | `0304` new name (str) |
 | 20 | UpdateVisibleNodes | `1344` | `01e1` node id, `0376` u32 — sent every ~3 s |
 | 28 | LanguageChanged | — | `025a` u32 ×2 (lang ids, e.g. 1033, 1046) |
 
-Still unmapped (RTTI names them; code numbers unknown): ApproveJoin, KickNode,
+Still unmapped (RTTI names them; code numbers unknown): KickNode,
 GrantAdmin, RevokeAdmin, ChangeAlias-of-node, ChatCommand/OpenChat, EnableNetwork,
-EnumPublicNetworks, SetSettings. `10` needs disambiguating (the user right-clicked
-peers; map the exact click to the code before trusting it).
+EnumPublicNetworks, SetSettings. Each command's code is the immediate the
+service pushes before calling the base-command constructor in the class ctor
+(find it by the vtable write `mov [esi], <vtable>` of the RTTI class).
 
 ## Events / replies observed (service → GUI, tag `0301`)
 
@@ -95,6 +96,16 @@ peers; map the exact click to the code before trusting it).
 | 23 | node connected in/out | `1266` channel { endpoints, rtt } |
 | 28 | latency tick (~10 s) | `01e1` node id, `034d` u32 (ms?) |
 | 21,24,26,33,35,36,… | per-node detail updates | version `01ed`, rtt `03a0`, etc. |
+
+Network properties (`DlgNetworkProperties`): `0308` is "Allow sending connect
+requests without password" (joiners without password wait for approval; the
+password still works), `0323` is "Block joining for new members".
+
+Roles (`030a`): on a network container it is this machine's role; inside a
+membership ref (`1324`) it is that member's role. `0` Applicant (waiting for
+approval), `1` Member, `2` Administrator. The service sends the full state only
+on connect; a client that connects before the service is switched on gets an
+empty one, so the app reconnects to resync.
 
 ## Attribute tags seen
 

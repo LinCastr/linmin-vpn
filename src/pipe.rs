@@ -20,7 +20,7 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
@@ -38,6 +38,7 @@ pub struct Client {
     state: Arc<Mutex<State>>,
     next_id: AtomicU32,
     alive: Arc<AtomicBool>,
+    born: Instant,
 }
 
 impl Client {
@@ -76,6 +77,7 @@ impl Client {
             state,
             next_id: AtomicU32::new(1),
             alive,
+            born: Instant::now(),
         };
         Ok(client)
     }
@@ -90,6 +92,11 @@ impl Client {
     /// Snapshot of the current state for the UI to render.
     pub fn snapshot(&self) -> State {
         self.state.lock().unwrap().clone()
+    }
+
+    /// How long ago this client connected.
+    pub fn age(&self) -> Duration {
+        self.born.elapsed()
     }
 
     /// True while the reader thread has not seen the relay close.
@@ -113,8 +120,18 @@ impl Client {
 
     // -- mapped commands -----------------------------------------------------
 
-    pub fn create_network(&self, name: &str, password: &str) -> Result<()> {
-        self.send(&msg::create_network(self.next_id(), name, password))
+    pub fn create_network(
+        &self,
+        name: &str,
+        password: &str,
+        allow_without_password: bool,
+    ) -> Result<()> {
+        self.send(&msg::create_network(
+            self.next_id(),
+            name,
+            password,
+            allow_without_password,
+        ))
     }
 
     pub fn join_network(&self, name: &str, password: &str) -> Result<()> {
@@ -129,6 +146,12 @@ impl Client {
         self.send(&msg::leave_network(self.next_id(), net))
     }
 
+    pub fn approve_join(&self, net: [u8; 16], node: u64) -> Result<()> {
+        self.send(&msg::approve_join(self.next_id(), net, node))?;
+        self.state.lock().unwrap().mark_approved(net, node);
+        Ok(())
+    }
+
     pub fn delete_network(&self, net: [u8; 16]) -> Result<()> {
         self.send(&msg::delete_network(self.next_id(), net))
     }
@@ -141,11 +164,22 @@ impl Client {
         &self,
         net: [u8; 16],
         name: &str,
-        prop_a: bool,
-        prop_b: bool,
-        prop_c: bool,
+        allow_without_password: bool,
+        block_new_members: bool,
+        new_password: Option<&str>,
     ) -> Result<()> {
-        self.send(&msg::update_network(self.next_id(), net, name, prop_a, prop_b, prop_c))
+        self.state
+            .lock()
+            .unwrap()
+            .update_network_props(net, allow_without_password, block_new_members);
+        self.send(&msg::update_network(
+            self.next_id(),
+            net,
+            name,
+            allow_without_password,
+            block_new_members,
+            new_password,
+        ))
     }
 
     /// Sends the visible-nodes heartbeat once, for every node currently known.
@@ -180,7 +214,7 @@ fn read_loop(mut stdout: impl Read, state: Arc<Mutex<State>>, alive: Arc<AtomicB
         reader.feed(&buf[..n]);
         while let Some(body) = reader.next_frame() {
             if let Ok(attrs) = decode_body(&body) {
-                if std::env::var_os("RWIRED_PIPE_RAW").is_some() {
+                if std::env::var_os("LINMIN_PIPE_RAW").is_some() {
                     eprintln!("--- frame ({} bytes) ---\n{attrs:#x?}", body.len());
                 }
                 state.lock().unwrap().apply(&attrs);
@@ -193,9 +227,14 @@ fn read_loop(mut stdout: impl Read, state: Arc<Mutex<State>>, alive: Arc<AtomicB
 /// Spawns a background heartbeat that pings visible nodes every ~3 s, matching
 /// the original GUI, until the client dies. Call once after `connect`.
 pub fn spawn_heartbeat(client: Arc<Client>) {
+    // Hold only a weak handle so dropping the client (resync, VPN off) still
+    // runs its Drop and kills the relay.
+    let weak = Arc::downgrade(&client);
+    drop(client);
     thread::spawn(move || {
-        while client.is_alive() {
+        while let Some(client) = weak.upgrade().filter(|c| c.is_alive()) {
             let _ = client.ping_visible_nodes();
+            drop(client);
             thread::sleep(Duration::from_secs(3));
         }
     });

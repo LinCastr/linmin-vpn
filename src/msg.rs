@@ -22,6 +22,7 @@ pub mod cmd {
     pub const JOIN_NETWORK: u32 = 3;
     pub const SWITCH_POWER: u32 = 4;
     pub const LEAVE_NETWORK: u32 = 5;
+    pub const APPROVE_JOIN: u32 = 10;
     pub const UPDATE_NETWORK: u32 = 14;
     pub const DELETE_NETWORK: u32 = 15;
     pub const CHANGE_ALIAS: u32 = 18;
@@ -82,12 +83,17 @@ pub fn encode_password_blob(password: &str) -> Vec<u8> {
 }
 
 /// Creates a new network (command 2).
-pub fn create_network(req_id: u32, name: &str, password: &str) -> Vec<Attr> {
+pub fn create_network(
+    req_id: u32,
+    name: &str,
+    password: &str,
+    allow_without_password: bool,
+) -> Vec<Attr> {
     let mut m = head(req_id, cmd::CREATE_NETWORK);
     m.push(Attr::container(
         tag::CREATE_NET_ARGS,
         vec![
-            Attr::bool(tag::NET_PROP_A, false),
+            Attr::bool(tag::NET_PROP_A, allow_without_password),
             Attr::str(tag::NET_NAME, name),
             Attr::bytes(tag::PASSWORD_BLOB, encode_password_blob(password)),
         ],
@@ -95,17 +101,20 @@ pub fn create_network(req_id: u32, name: &str, password: &str) -> Vec<Attr> {
     m
 }
 
-/// Joins an existing network (command 3).
+/// Joins an existing network (command 3). An empty password sends no blob at
+/// all, like the original GUI: on a network that allows connect requests
+/// without password this asks an administrator to approve the join.
 pub fn join_network(req_id: u32, name: &str, password: &str) -> Vec<Attr> {
     let mut m = head(req_id, cmd::JOIN_NETWORK);
-    m.push(Attr::container(
-        tag::JOIN_NET_ARGS,
-        vec![
-            Attr::bool(tag::JOIN_BOOL, false),
-            Attr::str(tag::NET_NAME, name),
-            Attr::bytes(tag::PASSWORD_BLOB, encode_password_blob(password)),
-        ],
-    ));
+    let mut args = vec![
+        // The GUI sets this on its "Gaming network" tab; plain networks send false.
+        Attr::bool(tag::JOIN_BOOL, false),
+        Attr::str(tag::NET_NAME, name),
+    ];
+    if !password.is_empty() {
+        args.push(Attr::bytes(tag::PASSWORD_BLOB, encode_password_blob(password)));
+    }
+    m.push(Attr::container(tag::JOIN_NET_ARGS, args));
     m
 }
 
@@ -123,6 +132,15 @@ pub fn leave_network(req_id: u32, net: [u8; 16]) -> Vec<Attr> {
     m
 }
 
+/// Lets an applicant into a network this machine administers (command 10).
+/// The service reads `0309` and `01e1` at the top level, no container.
+pub fn approve_join(req_id: u32, net: [u8; 16], node: u64) -> Vec<Attr> {
+    let mut m = head(req_id, cmd::APPROVE_JOIN);
+    m.push(Attr::guid(tag::NET_GUID, net));
+    m.push(Attr::new(tag::NODE_ID, Value::U64(node)));
+    m
+}
+
 /// Deletes a network the user owns (command 15).
 pub fn delete_network(req_id: u32, net: [u8; 16]) -> Vec<Attr> {
     let mut m = head(req_id, cmd::DELETE_NETWORK);
@@ -137,28 +155,29 @@ pub fn change_alias(req_id: u32, alias: &str) -> Vec<Attr> {
     m
 }
 
-/// Updates a network's name and boolean properties (command 14). The three
-/// booleans match the create flags; their exact meaning is still unmapped, so
-/// callers pass through whatever the current state reports.
+/// Updates a network's name and properties (command 14).
+/// If `new_password` is provided, tag 0x031c (change password) is true and tag 0x030d is included.
 pub fn update_network(
     req_id: u32,
     net: [u8; 16],
     name: &str,
-    prop_a: bool,
-    prop_b: bool,
-    prop_c: bool,
+    allow_without_password: bool,
+    block_new_members: bool,
+    new_password: Option<&str>,
 ) -> Vec<Attr> {
     let mut m = head(req_id, cmd::UPDATE_NETWORK);
-    m.push(Attr::container(
-        tag::UPDATE_NET_ARGS,
-        vec![
-            Attr::guid(tag::NET_GUID, net),
-            Attr::str(tag::NET_NAME, name),
-            Attr::bool(tag::NET_PROP_A, prop_a),
-            Attr::bool(tag::NET_PROP_C, prop_c),
-            Attr::bool(tag::NET_PROP_B, prop_b),
-        ],
-    ));
+    let change_pw = new_password.is_some();
+    let mut args = vec![
+        Attr::guid(tag::NET_GUID, net),
+        Attr::str(tag::NET_NAME, name),
+        Attr::bool(tag::NET_PROP_A, allow_without_password),
+        Attr::bool(tag::NET_PROP_C, block_new_members),
+        Attr::bool(tag::NET_PROP_B, change_pw),
+    ];
+    if let Some(pw) = new_password {
+        args.push(Attr::bytes(tag::PASSWORD_BLOB, encode_password_blob(pw)));
+    }
+    m.push(Attr::container(tag::UPDATE_NET_ARGS, args));
     m
 }
 
@@ -195,6 +214,24 @@ mod tests {
 
     fn first(attrs: &[Attr], tag: u16) -> &Value {
         &attrs.iter().find(|a| a.tag == tag).unwrap().value
+    }
+
+    #[test]
+    fn join_without_password_sends_no_blob() {
+        let args = |pw: &str| match first(&join_network(1, "Room", pw), tag::JOIN_NET_ARGS) {
+            Value::Container(c) => c.clone(),
+            _ => panic!("join args"),
+        };
+        assert!(!args("").iter().any(|a| a.tag == tag::PASSWORD_BLOB));
+        assert!(args("secret1").iter().any(|a| a.tag == tag::PASSWORD_BLOB));
+    }
+
+    #[test]
+    fn approve_join_is_command_10_with_guid_and_node() {
+        let m = approve_join(7, [0x11; 16], 42);
+        assert_eq!(first(&m, tag::CMD), &Value::U32(10));
+        assert_eq!(first(&m, tag::NET_GUID), &Value::Guid([0x11; 16]));
+        assert_eq!(first(&m, tag::NODE_ID), &Value::U64(42));
     }
 
     #[test]
@@ -257,12 +294,35 @@ mod tests {
 
     #[test]
     fn create_and_join_network_shapes() {
-        let m_create = create_network(1, "SalaJogo", "senha123");
+        let m_create = create_network(1, "SalaJogo", "senha123", true);
         assert_eq!(first(&m_create, 0x034a), &Value::U32(1));
         assert_eq!(first(&m_create, 0x0300), &Value::U32(cmd::CREATE_NETWORK));
 
         let m_join = join_network(2, "SalaJogo", "senha123");
         assert_eq!(first(&m_join, 0x034a), &Value::U32(2));
         assert_eq!(first(&m_join, 0x0300), &Value::U32(cmd::JOIN_NETWORK));
+    }
+
+    #[test]
+    fn update_network_shape() {
+        let guid = [0x55; 16];
+        let m = update_network(3, guid, "MinhaSala", true, false, Some("NovaSenha"));
+        assert_eq!(first(&m, 0x034a), &Value::U32(3));
+        assert_eq!(first(&m, 0x0300), &Value::U32(cmd::UPDATE_NETWORK));
+        let Value::Container(args) = first(&m, 0x132a) else {
+            panic!("expected container");
+        };
+        assert_eq!(first(args, 0x0309), &Value::Guid(guid));
+        assert_eq!(first(args, 0x0308), &Value::Bool(true));
+        assert_eq!(first(args, 0x0323), &Value::Bool(false));
+        assert_eq!(first(args, 0x031c), &Value::Bool(true));
+        assert!(args.iter().any(|a| a.tag == 0x030d));
+
+        let m_no_pw = update_network(4, guid, "MinhaSala", false, true, None);
+        let Value::Container(args2) = first(&m_no_pw, 0x132a) else {
+            panic!("expected container");
+        };
+        assert_eq!(first(args2, 0x031c), &Value::Bool(false));
+        assert!(!args2.iter().any(|a| a.tag == 0x030d));
     }
 }

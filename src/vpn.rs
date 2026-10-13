@@ -9,7 +9,6 @@
 use std::ffi::CStr;
 use std::fs;
 use std::io::{BufRead, BufReader};
-use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -19,7 +18,6 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 
 pub const DEV: &str = "radminvpn0";
-const SHIM: &str = include_str!("../data/sudo-shim");
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Phase {
@@ -44,7 +42,7 @@ pub fn data_dir() -> PathBuf {
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
         .unwrap_or_else(|| crate::home().join(".local/share"))
-        .join("radmin-wired")
+        .join("linmin-vpn")
 }
 
 /// Where the upstream launcher keeps its Wine prefix and log.
@@ -81,7 +79,7 @@ fn cmdline(pid: i32) -> String {
 }
 
 /// Processes whose command line contains `needle`.
-fn find_procs(needle: &str) -> Vec<i32> {
+pub fn find_procs(needle: &str) -> Vec<i32> {
     let Ok(dir) = fs::read_dir("/proc") else { return vec![] };
     let me = std::process::id() as i32;
     dir.flatten()
@@ -137,11 +135,8 @@ pub fn start(appimage: &Path, use_helper: bool) -> Result<()> {
     fs::create_dir_all(&dir)?;
     let mut path = std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".into());
     if use_helper {
-        let shim_dir = dir.join("shim");
-        fs::create_dir_all(&shim_dir)?;
-        let shim = shim_dir.join("sudo");
-        fs::write(&shim, SHIM)?;
-        fs::set_permissions(&shim, fs::Permissions::from_mode(0o755))?;
+        let _ = crate::setup::ensure_shim();
+        let shim_dir = crate::setup::shim_path().parent().unwrap().to_path_buf();
         path = format!("{}:{path}", shim_dir.display());
     }
     let child = Command::new(appimage)

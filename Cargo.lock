@@ -2327,6 +2327,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d4a5ff6bcca6c4867b1c4fd4ef63e4db7436ef363e0ad7531d1558856bae64f4"
 
 [[package]]
+name = "linmin-vpn"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ksni",
+ "libc",
+ "png 0.17.16",
+ "serde",
+ "serde_json",
+ "sha2",
+ "slint",
+ "slint-build",
+ "ureq",
+]
+
+[[package]]
 name = "linux-raw-sys"
 version = "0.4.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3331,22 +3347,6 @@ name = "r-efi"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
-
-[[package]]
-name = "radmin-wired"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "ksni",
- "libc",
- "png 0.17.16",
- "serde",
- "serde_json",
- "sha2",
- "slint",
- "slint-build",
- "ureq",
-]
 
 [[package]]
 name = "range-alloc"

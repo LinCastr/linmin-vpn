@@ -31,9 +31,12 @@ mod tag {
     pub const ALIAS: u16 = 0x0304; // node/computer name
     pub const ADDR: u16 = 0x0305; // first occurrence is IPv4 (u32); IPv6 repeats the tag
     pub const NET_NAME: u16 = 0x0306;
+    pub const NET_PROP_A: u16 = 0x0308; // allow connect without password
     pub const NET_GUID: u16 = 0x0309;
+    pub const ROLE: u16 = 0x030a; // 0 applicant, 1 member, 2 administrator
     pub const POWER: u16 = 0x0311; // self power bool
     pub const CONNECT_STATE: u16 = 0x0312;
+    pub const NET_PROP_C: u16 = 0x0323; // block joining for new members
     pub const VERSION: u16 = 0x01ed; // "2.1.1"
     pub const RTT: u16 = 0x03a0;
     pub const LATENCY: u16 = 0x034d;
@@ -54,6 +57,37 @@ pub struct Node {
     pub online: bool,
     pub rtt_ms: Option<u32>,
     pub version: Option<String>,
+    /// Role in the network this node is listed under (see [`role`]).
+    pub role: Option<u32>,
+}
+
+/// Network roles carried by tag `0x030a`, matching the original GUI's labels.
+pub mod role {
+    pub const APPLICANT: u32 = 0; // asked to join, waiting for an admin's approval
+    pub const MEMBER: u32 = 1;
+    pub const ADMIN: u32 = 2;
+}
+
+impl Node {
+    /// True when the node asked to join and still waits for approval.
+    pub fn is_applicant(&self) -> bool {
+        self.role == Some(role::APPLICANT)
+    }
+}
+
+impl Network {
+    /// Whether this machine may delete the network. Unknown role: allow, the
+    /// service has the final word.
+    pub fn can_delete(&self) -> bool {
+        self.self_role.map_or(true, |r| r == role::ADMIN)
+    }
+
+    /// The service refuses to let the last administrator leave; it has to
+    /// delete the network instead.
+    pub fn is_last_admin(&self) -> bool {
+        self.self_role == Some(role::ADMIN)
+            && !self.nodes.iter().any(|n| n.role == Some(role::ADMIN))
+    }
 }
 
 /// A network (room) and the peers currently in it.
@@ -62,7 +96,13 @@ pub struct Network {
     pub guid: [u8; 16],
     pub name: String,
     pub members: u32,
+    pub allow_without_password: bool,
+    pub block_new_members: bool,
     pub nodes: Vec<Node>,
+    pub has_prop_a: bool,
+    pub has_prop_c: bool,
+    /// This machine's own role in the network.
+    pub self_role: Option<u32>,
 }
 
 /// The whole picture the UI draws.
@@ -121,8 +161,29 @@ impl State {
     }
 
     /// Inserts a network or replaces the existing one with the same GUID.
-    fn upsert_network(&mut self, net: Network) -> bool {
+    fn upsert_network(&mut self, mut net: Network) -> bool {
         if let Some(slot) = self.networks.iter_mut().find(|n| n.guid == net.guid) {
+            // Se o delta recebido (ex: NETWORKS_CHANGED 0x1329) vier sem lista de nós,
+            // preserva os nós já conhecidos.
+            if net.nodes.is_empty() && !slot.nodes.is_empty() {
+                net.nodes = std::mem::take(&mut slot.nodes);
+            }
+            // Se o membro count vier zerado no delta, preserva o anterior
+            if net.members == 0 && slot.members > 0 {
+                net.members = slot.members;
+            }
+            // Se as propriedades não vierem no novo registro, preserva as anteriores
+            if !net.has_prop_a && slot.has_prop_a {
+                net.allow_without_password = slot.allow_without_password;
+                net.has_prop_a = true;
+            }
+            if net.self_role.is_none() {
+                net.self_role = slot.self_role;
+            }
+            if !net.has_prop_c && slot.has_prop_c {
+                net.block_new_members = slot.block_new_members;
+                net.has_prop_c = true;
+            }
             if *slot == net {
                 return false;
             }
@@ -133,13 +194,56 @@ impl State {
         true
     }
 
+    /// Marks an applicant as a member right after approving it, so the UI does
+    /// not keep showing it as pending until the next full state.
+    pub fn mark_approved(&mut self, net: [u8; 16], node: u64) -> bool {
+        let Some(n) = self
+            .networks
+            .iter_mut()
+            .find(|n| n.guid == net)
+            .and_then(|n| n.nodes.iter_mut().find(|x| x.id == node))
+        else {
+            return false;
+        };
+        let changed = n.role != Some(role::MEMBER);
+        n.role = Some(role::MEMBER);
+        changed
+    }
+
+    /// Atualiza manualmente as propriedades de uma rede conhecida (ex: após salvar
+    /// no modal de propriedades ou a partir do cache de configurações).
+    pub fn update_network_props(
+        &mut self,
+        guid: [u8; 16],
+        allow_without_password: bool,
+        block_new_members: bool,
+    ) -> bool {
+        if let Some(net) = self.networks.iter_mut().find(|n| n.guid == guid) {
+            if net.allow_without_password == allow_without_password
+                && net.block_new_members == block_new_members
+                && net.has_prop_a
+                && net.has_prop_c
+            {
+                return false;
+            }
+            net.allow_without_password = allow_without_password;
+            net.block_new_members = block_new_members;
+            net.has_prop_a = true;
+            net.has_prop_c = true;
+            return true;
+        }
+        false
+    }
+
     fn set_node_rtt(&mut self, node_id: u64, ms: u32) -> bool {
         for net in &mut self.networks {
             if let Some(node) = net.nodes.iter_mut().find(|n| n.id == node_id) {
-                if node.rtt_ms == Some(ms) {
+                let online = ms > 0;
+                if node.rtt_ms == Some(ms) && node.online == online {
                     return false;
                 }
                 node.rtt_ms = Some(ms);
+                node.online = online;
                 return true;
             }
         }
@@ -209,7 +313,10 @@ fn parse_node_detail(children: &[Attr]) -> Node {
     if let Some(Value::U32(v)) = value_of(children, tag::ADDR) {
         node.ipv4 = Some(Ipv4Addr::from(*v));
     }
-    node.online = has_tag(children, tag::CHANNEL) || node.rtt_ms.is_some();
+    // Um nó só é considerado online se possuir um canal de comunicação ativo
+    // (tag CHANNEL 0x1266) ou uma latência medida maior que zero. Nós offline
+    // vêm sem canal e com rtt zerado/ausente.
+    node.online = has_tag(children, tag::CHANNEL) || node.rtt_ms.map_or(false, |ms| ms > 0);
     node
 }
 
@@ -239,6 +346,11 @@ fn parse_network(children: &[Attr], details: &std::collections::HashMap<u64, Nod
     }
     net.name = find_str(children, tag::NET_NAME).unwrap_or_default();
     net.members = find_u32(children, tag::MEMBER_COUNT).unwrap_or(0);
+    net.has_prop_a = has_tag(children, tag::NET_PROP_A);
+    net.allow_without_password = find_bool(children, tag::NET_PROP_A).unwrap_or(false);
+    net.has_prop_c = has_tag(children, tag::NET_PROP_C);
+    net.block_new_members = find_bool(children, tag::NET_PROP_C).unwrap_or(false);
+    net.self_role = find_u32(children, tag::ROLE);
     for a in children {
         if a.tag != tag::MEMBER_REF {
             continue;
@@ -247,10 +359,12 @@ fn parse_network(children: &[Attr], details: &std::collections::HashMap<u64, Nod
             continue;
         };
         if let Some(Value::U64(id)) = value_of(ref_attrs, tag::NODE_ID) {
-            net.nodes.push(details.get(id).cloned().unwrap_or(Node {
+            let mut node = details.get(id).cloned().unwrap_or(Node {
                 id: *id,
                 ..Node::default()
-            }));
+            });
+            node.role = find_u32(ref_attrs, tag::ROLE);
+            net.nodes.push(node);
         }
     }
     net
@@ -306,6 +420,13 @@ fn find_str(attrs: &[Attr], tag: u16) -> Option<String> {
     }
 }
 
+fn find_bool(attrs: &[Attr], tag: u16) -> Option<bool> {
+    match value_of(attrs, tag) {
+        Some(Value::Bool(b)) => Some(*b),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -332,6 +453,8 @@ mod tests {
                 Attr::u32(0x030a, 2),
                 Attr::u32(tag::MEMBER_COUNT, 1),
                 Attr::str(tag::NET_NAME, "Volakia"),
+                Attr::bool(tag::NET_PROP_A, true),
+                Attr::bool(tag::NET_PROP_C, false),
                 member_ref(1),
                 member_ref(10),
             ],
@@ -368,6 +491,8 @@ mod tests {
         let net = &st.networks[0];
         assert_eq!(net.name, "Volakia");
         assert_eq!(net.members, 1);
+        assert_eq!(net.allow_without_password, true);
+        assert_eq!(net.block_new_members, false);
         assert_eq!(net.nodes.len(), 2);
         // Self member: id only, no detail record under 0x1322.
         assert_eq!(net.nodes[0].id, 1);
@@ -380,6 +505,34 @@ mod tests {
         assert_eq!(peer.version.as_deref(), Some("2.1.1"));
         assert_eq!(peer.rtt_ms, Some(75));
         assert!(peer.online);
+        assert_eq!(peer.role, Some(1));
+        assert!(!peer.is_applicant());
+        assert_eq!(net.self_role, Some(2));
+        assert!(net.can_delete());
+        assert!(net.is_last_admin());
+    }
+
+    #[test]
+    fn member_role_zero_is_applicant() {
+        let mut ev = full_state_event();
+        // Turn the peer's membership ref (id 10) into an applicant.
+        fn patch(attrs: &mut [Attr]) {
+            for a in attrs {
+                if let Value::Container(ch) = &mut a.value {
+                    if a.tag == tag::MEMBER_REF
+                        && matches!(value_of(ch, tag::NODE_ID), Some(Value::U64(10)))
+                    {
+                        ch.retain(|c| c.tag != tag::ROLE);
+                        ch.push(Attr::u32(tag::ROLE, role::APPLICANT));
+                    }
+                    patch(ch);
+                }
+            }
+        }
+        patch(&mut ev);
+        let mut st = State::default();
+        st.apply(&ev);
+        assert!(st.networks[0].nodes[1].is_applicant());
     }
 
     #[test]
@@ -402,5 +555,33 @@ mod tests {
         let mut st = State::default();
         assert!(st.apply(&full_state_event()));
         assert!(!st.apply(&full_state_event()));
+    }
+
+    #[test]
+    fn networks_changed_delta_preserves_existing_nodes_and_props() {
+        let mut st = State::default();
+        assert!(st.apply(&full_state_event()));
+        assert_eq!(st.networks[0].nodes.len(), 2);
+        assert_eq!(st.networks[0].allow_without_password, true);
+
+        // Simula evento 7 NETWORKS_CHANGED com atributos da rede atualizados mas SEM MEMBER_REF
+        let net_delta = Attr::container(
+            0x1329,
+            vec![
+                Attr::guid(tag::NET_GUID, [0x33; 16]),
+                Attr::str(tag::NET_NAME, "Volakia Renomeada"),
+            ],
+        );
+        let delta_event = vec![
+            Attr::u32(tag::EVENT, event::NETWORKS_CHANGED),
+            Attr::container(0x131f, vec![net_delta]),
+        ];
+
+        assert!(st.apply(&delta_event));
+        // O nome atualizou
+        assert_eq!(st.networks[0].name, "Volakia Renomeada");
+        // Os nós existentes e as propriedades foram preservados
+        assert_eq!(st.networks[0].nodes.len(), 2);
+        assert_eq!(st.networks[0].allow_without_password, true);
     }
 }

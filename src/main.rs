@@ -1,4 +1,4 @@
-//! radmin-wired: a small native front end for Radmin VPN on Linux.
+//! linmin-vpn: a small native front end for Radmin VPN on Linux.
 //!
 //! It runs the radmin-vpn-linux AppImage without a terminal, keeps an icon in
 //! the system tray (StatusNotifierItem) and, after a one-time setup, never asks
@@ -15,6 +15,7 @@ mod theme;
 mod vpn;
 
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
@@ -36,7 +37,7 @@ fn socket_path() -> PathBuf {
     std::env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)
-        .join("radmin-wired.sock")
+        .join("linmin-vpn.sock")
 }
 
 static QUITTING: AtomicBool = AtomicBool::new(false);
@@ -64,25 +65,45 @@ impl Tray {
     }
 }
 
+fn load_tray_icon() -> Option<ksni::Icon> {
+    let bytes = include_bytes!("../data/linmin-vpn.png");
+    let decoder = png::Decoder::new(&bytes[..]);
+    let mut reader = decoder.read_info().ok()?;
+    let mut buf = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buf).ok()?;
+    // ksni expects ARGB32 in network byte order (A, R, G, B)
+    let mut argb = Vec::with_capacity((info.width * info.height * 4) as usize);
+    for chunk in buf[..info.buffer_size()].chunks_exact(4) {
+        argb.push(chunk[3]); // A
+        argb.push(chunk[0]); // R
+        argb.push(chunk[1]); // G
+        argb.push(chunk[2]); // B
+    }
+    Some(ksni::Icon {
+        width: info.width as i32,
+        height: info.height as i32,
+        data: argb,
+    })
+}
+
 impl ksni::Tray for Tray {
     fn id(&self) -> String {
-        "radmin-wired".into()
+        "linmin-vpn".into()
     }
     fn title(&self) -> String {
-        "Radmin VPN".into()
+        "Linmin VPN".into()
     }
     fn icon_name(&self) -> String {
-        match self.phase {
-            vpn::Phase::On => "network-vpn",
-            vpn::Phase::Starting(_) | vpn::Phase::Stopping => "network-vpn-acquiring",
-            vpn::Phase::Failed(_) => "network-vpn-error-symbolic",
-            vpn::Phase::Off => "network-vpn-disconnected-symbolic",
-        }
-        .into()
+        "linmin-vpn".into()
+    }
+    fn icon_pixmap(&self) -> Vec<ksni::Icon> {
+        static ICON: std::sync::OnceLock<Option<ksni::Icon>> = std::sync::OnceLock::new();
+        let icon = ICON.get_or_init(load_tray_icon);
+        icon.clone().into_iter().collect()
     }
     fn tool_tip(&self) -> ksni::ToolTip {
         ksni::ToolTip {
-            title: "Radmin VPN".into(),
+            title: "Linmin VPN".into(),
             description: phase_text(&self.phase, &self.ip),
             ..Default::default()
         }
@@ -183,6 +204,10 @@ fn live_state(
     code: i32,
 ) -> Option<state::State> {
     let on = code == 2;
+    // The Wine window was closed: take the pipe back.
+    if WINE_GUI.load(Ordering::Relaxed) && vpn::find_procs("RvRvpnGui.exe").is_empty() {
+        WINE_GUI.store(false, Ordering::Relaxed);
+    }
     let wine_gui = WINE_GUI.load(Ordering::Relaxed);
 
     // Drop the client when it should not be running or has died.
@@ -194,6 +219,7 @@ fn live_state(
         }
     }
     if !on || wine_gui {
+        LAST_LIVE.with(|last| last.borrow_mut().take());
         return None;
     }
     // Connect if we have no client yet.
@@ -202,6 +228,7 @@ fn live_state(
             Ok(c) => {
                 let c = Arc::new(c);
                 pipe::spawn_heartbeat(Arc::clone(&c));
+                let _ = c.switch_power(true);
                 *cell.borrow_mut() = Some(c);
             }
             // Leave the slot empty; the ARP fallback covers this tick and we
@@ -210,23 +237,99 @@ fn live_state(
         }
     }
     let client = cell.borrow().as_ref().map(Arc::clone)?;
-    Some(client.snapshot())
+    let snap = client.snapshot();
+    if snap.power == Some(false) {
+        let _ = client.switch_power(true);
+    }
+    // The service only sends the full state (event 34) right after a client
+    // connects, and not every later change arrives as an event we parse (a
+    // join request, or networks loaded after the client connected while the
+    // service was still starting). Reconnecting gets a fresh full state: soon
+    // when it came empty, and periodically otherwise.
+    let resync_after = if snap.networks.is_empty() {
+        PIPE_RESYNC_EMPTY
+    } else {
+        PIPE_RESYNC_PERIOD
+    };
+    if client.age() >= resync_after {
+        cell.borrow_mut().take();
+    }
+    LAST_LIVE.with(|last| {
+        let mut last = last.borrow_mut();
+        if !snap.networks.is_empty() {
+            *last = Some(snap.clone());
+            return Some(snap);
+        }
+        // A fresh client has not received its full state yet: keep showing
+        // the previous one instead of flashing the ARP fallback.
+        match last.as_ref() {
+            Some(prev) if client.age() < PIPE_RESYNC_EMPTY => Some(prev.clone()),
+            _ => Some(snap),
+        }
+    })
+}
+
+/// How long a pipe client may report no networks before it is reconnected.
+const PIPE_RESYNC_EMPTY: Duration = Duration::from_secs(4);
+/// How often a healthy pipe client is reconnected to refresh the full state.
+const PIPE_RESYNC_PERIOD: Duration = Duration::from_secs(20);
+
+thread_local! {
+    /// Last live snapshot that had networks, shown while a new client syncs.
+    static LAST_LIVE: RefCell<Option<state::State>> = const { RefCell::new(None) };
+}
+
+/// Converts a state::Node into the Slint PeerInfo struct.
+fn peer_info(node: &state::Node) -> PeerInfo {
+    let ip = node.ipv4.map(|a| a.to_string()).unwrap_or_default();
+    let alias = if node.alias.is_empty() {
+        ip.clone()
+    } else {
+        node.alias.clone()
+    };
+    let latency = if node.online && node.rtt_ms.map_or(false, |ms| ms > 0) {
+        node.rtt_ms.map(|ms| format!("{ms} ms")).unwrap_or_default()
+    } else {
+        String::new()
+    };
+    PeerInfo {
+        alias: alias.into(),
+        ip: ip.into(),
+        online: node.online,
+        latency: latency.into(),
+        id: node.id.to_string().into(),
+        applicant: node.is_applicant(),
+    }
 }
 
 /// Builds the network rows for the UI from a live snapshot, or a single
 /// fallback "network" from the ARP addresses when there is no live data yet.
 fn network_rows(live: Option<&state::State>, arp: &[String]) -> Vec<NetInfo> {
     if let Some(st) = live.filter(|s| !s.networks.is_empty()) {
+        let cache = setup::load_networks_cache();
         return st
             .networks
             .iter()
             .map(|net| {
-                let peers: Vec<SharedString> =
-                    net.nodes.iter().map(|n| SharedString::from(peer_line(n))).collect();
+                let peers: Vec<PeerInfo> = net.nodes.iter().map(peer_info).collect();
+                let id_str = hex_guid(&net.guid);
+                let (allow_pw, block_new) = if net.has_prop_a || net.has_prop_c {
+                    (net.allow_without_password, net.block_new_members)
+                } else if let Some(saved) = cache.get(&id_str) {
+                    (saved.allow_without_password, saved.block_new_members)
+                } else {
+                    (net.allow_without_password, net.block_new_members)
+                };
                 NetInfo {
                     name: net.name.clone().into(),
-                    id: hex_guid(&net.guid).into(),
-                    members: net.members as i32,
+                    id: id_str.into(),
+                    online: peers.iter().filter(|p| p.online).count() as i32,
+                    total: peers.len() as i32,
+                    collapsed: false,
+                    allow_without_password: allow_pw,
+                    block_new_members: block_new,
+                    can_delete: net.can_delete(),
+                    last_admin: net.is_last_admin(),
                     peers: ModelRc::from(Rc::new(VecModel::from(peers))),
                 }
             })
@@ -237,11 +340,27 @@ fn network_rows(live: Option<&state::State>, arp: &[String]) -> Vec<NetInfo> {
     }
     // No live grouping: show the kernel's ARP addresses under one headless row,
     // with an empty id so no Leave button appears.
-    let peers: Vec<SharedString> = arp.iter().map(SharedString::from).collect();
+    let peers: Vec<PeerInfo> = arp
+        .iter()
+        .map(|ip| PeerInfo {
+            alias: ip.clone().into(),
+            ip: ip.clone().into(),
+            online: true,
+            latency: SharedString::new(),
+            id: SharedString::new(),
+            applicant: false,
+        })
+        .collect();
     vec![NetInfo {
         name: tr!("Seen on the network", "Vistos na rede").into(),
         id: SharedString::new(),
-        members: arp.len() as i32,
+        online: arp.len() as i32,
+        total: arp.len() as i32,
+        collapsed: false,
+        allow_without_password: false,
+        block_new_members: false,
+        can_delete: false,
+        last_admin: false,
         peers: ModelRc::from(Rc::new(VecModel::from(peers))),
     }]
 }
@@ -255,8 +374,20 @@ fn rows_signature(rows: &[NetInfo]) -> String {
         s.push('|');
         s.push_str(r.name.as_str());
         s.push('|');
+        s.push_str(if r.allow_without_password { "1|" } else { "0|" });
+        s.push_str(if r.block_new_members { "1|" } else { "0|" });
+        s.push_str(if r.can_delete { "1|" } else { "0|" });
+        s.push_str(if r.last_admin { "1|" } else { "0|" });
         for p in r.peers.iter() {
-            s.push_str(p.as_str());
+            s.push_str(p.alias.as_str());
+            s.push(':');
+            s.push_str(p.ip.as_str());
+            s.push(':');
+            s.push(if p.online { '1' } else { '0' });
+            s.push(':');
+            s.push_str(p.latency.as_str());
+            s.push(':');
+            s.push(if p.applicant { 'a' } else { 'm' });
             s.push(',');
         }
         s.push(';');
@@ -283,23 +414,6 @@ fn parse_guid(s: &str) -> Option<[u8; 16]> {
         *b = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).ok()?;
     }
     Some(g)
-}
-
-/// One peer row: name when known, then IP, then latency. Falls back to the IP
-/// alone when the service has not sent a name yet.
-fn peer_line(node: &state::Node) -> String {
-    let ip = node.ipv4.map(|a| a.to_string()).unwrap_or_default();
-    let mut s = if node.alias.is_empty() {
-        ip.clone()
-    } else if ip.is_empty() {
-        node.alias.clone()
-    } else {
-        format!("{} — {}", node.alias, ip)
-    };
-    if let Some(ms) = node.rtt_ms {
-        s.push_str(&format!("  ·  {ms} ms"));
-    }
-    s
 }
 
 // Helpers ----------------------------------------------------------------------
@@ -351,30 +465,82 @@ fn palette_mtime() -> Option<SystemTime> {
     theme::find_palette().and_then(|p| theme::mtime(&p))
 }
 
-/// Development: RWIRED_SNAPSHOT=file.png saves the window as an image and quits.
+/// Development: LINMIN_SNAPSHOT=file.png saves the window as an image and quits.
 fn snapshot_mode(ui: &AppWindow) -> bool {
-    let Ok(out) = std::env::var("RWIRED_SNAPSHOT") else { return false };
-    if std::env::var("RWIRED_SETTINGS").is_ok() {
+    let Ok(out) = std::env::var("LINMIN_SNAPSHOT") else { return false };
+    if std::env::var("LINMIN_SETTINGS").is_ok() {
         ui.set_show_settings(true);
     }
     let weak = ui.as_weak();
     // The pipe client needs a moment to spawn Wine and receive the first state;
-    // RWIRED_SNAPSHOT_DELAY (ms) lets a test wait for it.
-    let delay = std::env::var("RWIRED_SNAPSHOT_DELAY")
+    // LINMIN_SNAPSHOT_DELAY (ms) lets a test wait for it.
+    let delay = std::env::var("LINMIN_SNAPSHOT_DELAY")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(1500);
     slint::Timer::single_shot(Duration::from_millis(delay), move || {
         if let Some(ui) = weak.upgrade() {
-            if let Ok(img) = ui.window().take_snapshot() {
-                let file = std::fs::File::create(&out).expect("snapshot file");
-                let mut enc = png::Encoder::new(std::io::BufWriter::new(file), img.width(), img.height());
-                enc.set_color(png::ColorType::Rgba);
-                enc.set_depth(png::BitDepth::Eight);
-                let _ = enc.write_header().and_then(|mut w| w.write_image_data(img.as_bytes()));
+            // LINMIN_SNAPSHOT_SIZE=WxH checks the layout at another window size.
+            if let Some((w, h)) = std::env::var("LINMIN_SNAPSHOT_SIZE").ok().and_then(|v| {
+                let (w, h) = v.split_once('x')?;
+                Some((w.parse::<f32>().ok()?, h.parse::<f32>().ok()?))
+            }) {
+                ui.window().dispatch_event(slint::platform::WindowEvent::Resized {
+                    size: slint::LogicalSize::new(w, h),
+                });
+            }
+            // LINMIN_SNAPSHOT_CLICK="x,y[,right] ..." clicks before the shot, to
+            // check menus and dialogs without touching the user's screen.
+            for click in std::env::var("LINMIN_SNAPSHOT_CLICK").unwrap_or_default().split_whitespace() {
+                // "type:abc" types text, "key:esc" / "key:enter" presses a key.
+                let keys: Option<String> = if let Some(t) = click.strip_prefix("type:") {
+                    Some(t.replace("%20", " "))
+                } else {
+                    match click {
+                        "key:esc" => Some(SharedString::from(slint::platform::Key::Escape).to_string()),
+                        "key:enter" => Some(SharedString::from(slint::platform::Key::Return).to_string()),
+                        _ => None,
+                    }
+                };
+                if let Some(keys) = keys {
+                    for ch in keys.chars() {
+                        let text: SharedString = ch.to_string().into();
+                        ui.window().dispatch_event(slint::platform::WindowEvent::KeyPressed { text: text.clone() });
+                        ui.window().dispatch_event(slint::platform::WindowEvent::KeyReleased { text });
+                    }
+                    continue;
+                }
+                let parts: Vec<&str> = click.split(',').collect();
+                let (Some(Ok(x)), Some(Ok(y))) = (parts.first().map(|s| s.parse::<f32>()), parts.get(1).map(|s| s.parse::<f32>())) else {
+                    continue;
+                };
+                let button = if parts.get(2) == Some(&"right") {
+                    slint::platform::PointerEventButton::Right
+                } else {
+                    slint::platform::PointerEventButton::Left
+                };
+                let position = slint::LogicalPosition::new(x, y);
+                let w = ui.window();
+                w.dispatch_event(slint::platform::WindowEvent::PointerMoved { position });
+                w.dispatch_event(slint::platform::WindowEvent::PointerPressed { position, button });
+                w.dispatch_event(slint::platform::WindowEvent::PointerReleased { position, button });
             }
         }
-        let _ = slint::quit_event_loop();
+        // LINMIN_SNAPSHOT_AFTER (ms) waits after the clicks, e.g. for a model
+        // rebuild by the status timer.
+        let after = std::env::var("LINMIN_SNAPSHOT_AFTER").ok().and_then(|s| s.parse().ok()).unwrap_or(0);
+        slint::Timer::single_shot(Duration::from_millis(after), move || {
+            if let Some(ui) = weak.upgrade() {
+                if let Ok(img) = ui.window().take_snapshot() {
+                    let file = std::fs::File::create(&out).expect("snapshot file");
+                    let mut enc = png::Encoder::new(std::io::BufWriter::new(file), img.width(), img.height());
+                    enc.set_color(png::ColorType::Rgba);
+                    enc.set_depth(png::BitDepth::Eight);
+                    let _ = enc.write_header().and_then(|mut w| w.write_image_data(img.as_bytes()));
+                }
+            }
+            let _ = slint::quit_event_loop();
+        });
     });
     true
 }
@@ -398,10 +564,21 @@ fn refresh_setup(ui: &AppWindow) {
 }
 
 fn toast(ui: &AppWindow, text: String) {
-    ui.set_toast(text.into());
+    show_toast(ui, text, false);
+}
+
+fn toast_error(ui: &AppWindow, text: String) {
+    show_toast(ui, text, true);
+}
+
+fn show_toast(ui: &AppWindow, text: String, error: bool) {
+    let text: SharedString = text.into();
+    ui.set_toast(text.clone());
+    ui.set_toast_error(error);
     let weak = ui.as_weak();
     slint::Timer::single_shot(Duration::from_secs(3), move || {
-        if let Some(ui) = weak.upgrade() {
+        // Only clear our own message; a newer toast keeps its full time.
+        if let Some(ui) = weak.upgrade().filter(|ui| ui.get_toast() == text) {
             ui.set_toast(SharedString::new());
         }
     });
@@ -411,16 +588,38 @@ fn start_vpn(ui: &AppWindow) {
     vpn::clear_failure();
     let cfg = setup::load();
     let Some(app) = setup::appimage(&cfg) else { return };
-    let helper = setup::helper_state() == setup::HelperState::Ok;
+    if setup::helper_state() != setup::HelperState::Ok {
+        ui.set_busy(true);
+        let weak = ui.as_weak();
+        std::thread::spawn(move || {
+            let ok = setup::set_helper(true).is_ok();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = weak.upgrade() {
+                    ui.set_busy(false);
+                    refresh_setup(&ui);
+                    if ok {
+                        let helper = setup::helper_state() == setup::HelperState::Ok;
+                        if let Err(e) = vpn::start(&app, helper) {
+                            toast_error(&ui, tr!("Could not start: {e}", "Não foi possível ligar: {e}"));
+                        }
+                    } else {
+                        toast(&ui, tr!("Cancelled", "Cancelado"));
+                    }
+                }
+            });
+        });
+        return;
+    }
+    let helper = true;
     if let Err(e) = vpn::start(&app, helper) {
-        toast(ui, tr!("Could not start: {e}", "Não foi possível ligar: {e}"));
+        toast_error(ui, tr!("Could not start: {e}", "Não foi possível ligar: {e}"));
     }
 }
 
-/// `radmin-wired up|down|status` for scripts and testing.
+/// `linmin-vpn up|down|status|install-helper` for scripts and testing.
 fn cli(args: &[String]) -> Option<i32> {
     let cmd = args.first()?.as_str();
-    if !["up", "down", "status", "pipe-dump"].contains(&cmd) {
+    if !["up", "down", "status", "pipe-dump", "install-helper", "setup-helper", "remove-helper"].contains(&cmd) {
         return None;
     }
     i18n::apply_lang(&setup::load().language);
@@ -437,17 +636,22 @@ fn cli(args: &[String]) -> Option<i32> {
             let client = match pipe::Client::connect(&relay) {
                 Ok(c) => c,
                 Err(e) => {
-                    eprintln!("radmin-wired: pipe connect: {e:#}");
+                    eprintln!("linmin-vpn: pipe connect: {e:#}");
                     return Some(1);
                 }
             };
             std::thread::sleep(Duration::from_millis(500));
             let _ = client.ping_visible_nodes();
             // Optional write probe: `rename:<name>` sends ChangeAlias so the
-            // reply (result 0x310) can be observed under RWIRED_PIPE_RAW.
+            // reply (result 0x310) can be observed under LINMIN_PIPE_RAW.
+            if args.iter().any(|a| a == "power:on" || a == "power:1") {
+                if let Err(e) = client.switch_power(true) {
+                    eprintln!("linmin-vpn: switch_power: {e:#}");
+                }
+            }
             if let Some(rest) = args.get(3).and_then(|s| s.strip_prefix("rename:")) {
                 if let Err(e) = client.change_alias(rest) {
-                    eprintln!("radmin-wired: rename: {e:#}");
+                    eprintln!("linmin-vpn: rename: {e:#}");
                 }
             }
             let deadline = Instant::now() + Duration::from_secs(secs);
@@ -483,14 +687,41 @@ fn cli(args: &[String]) -> Option<i32> {
         "up" => {
             let cfg = setup::load();
             let Some(app) = setup::appimage(&cfg) else {
-                eprintln!("radmin-wired: AppImage not installed (open the app to install it)");
+                eprintln!("linmin-vpn: AppImage not installed (open the app to install it)");
                 return Some(1);
             };
+            if setup::helper_state() != setup::HelperState::Ok {
+                eprintln!("linmin-vpn: helper is missing or outdated. Run 'linmin-vpn install-helper' to avoid sudo password prompts.");
+            }
             if let Err(e) = vpn::start(&app, setup::helper_state() == setup::HelperState::Ok) {
-                eprintln!("radmin-wired: {e:#}");
+                eprintln!("linmin-vpn: {e:#}");
                 return Some(1);
             }
             Some(0)
+        }
+        "install-helper" | "setup-helper" => {
+            match setup::set_helper(true) {
+                Ok(_) => {
+                    println!("linmin-vpn: helper and polkit policy installed successfully");
+                    Some(0)
+                }
+                Err(e) => {
+                    eprintln!("linmin-vpn: failed to install helper: {e:#}");
+                    Some(1)
+                }
+            }
+        }
+        "remove-helper" => {
+            match setup::set_helper(false) {
+                Ok(_) => {
+                    println!("linmin-vpn: helper and polkit policy removed");
+                    Some(0)
+                }
+                Err(e) => {
+                    eprintln!("linmin-vpn: failed to remove helper: {e:#}");
+                    Some(1)
+                }
+            }
         }
         "down" => {
             vpn::stop();
@@ -529,7 +760,7 @@ fn main() {
     if let Some(code) = cli(&args) {
         std::process::exit(code);
     }
-    let snapshot = std::env::var("RWIRED_SNAPSHOT").is_ok();
+    let snapshot = std::env::var("LINMIN_SNAPSHOT").is_ok();
 
     // One instance: a second launch just shows the first one's window.
     let sock = socket_path();
@@ -541,7 +772,7 @@ fn main() {
 
     let ui = AppWindow::new().expect("window");
     // Only works once the platform exists (AppWindow::new creates it).
-    let _ = slint::set_xdg_app_id(std::env::var("RWIRED_APP_ID").unwrap_or_else(|_| "radmin-wired".into()));
+    let _ = slint::set_xdg_app_id(std::env::var("LINMIN_APP_ID").unwrap_or_else(|_| "linmin-vpn".into()));
     i18n::apply(&setup::load().language);
     apply_theme(&ui);
     refresh_setup(&ui);
@@ -611,42 +842,44 @@ fn main() {
             WINE_GUI.store(true, Ordering::Relaxed);
             client_cell.borrow_mut().take();
             if let Err(e) = vpn::open_radmin_window() {
-                toast(&weak.unwrap(), tr!("Could not open: {e}", "Não foi possível abrir: {e}"));
+                toast_error(&weak.unwrap(), tr!("Could not open: {e}", "Não foi possível abrir: {e}"));
             }
         });
     }
     {
         let weak = ui.as_weak();
         let client_cell = client_cell.clone();
-        ui.on_create_network(move |name, password| {
+        ui.on_create_network(move |name, password, allow_without_password| {
             let ui = weak.unwrap();
+            let fail = |msg: String| {
+                ui.set_dialog_error(msg.into());
+                false
+            };
             let name = name.trim();
             if name.is_empty() {
-                toast(&ui, tr!("Network name is required", "Nome da rede é obrigatório"));
-                return;
+                return fail(tr!("Network name is required", "Nome da rede é obrigatório"));
             }
-            if password.len() < 6 {
-                toast(
-                    &ui,
-                    tr!(
-                        "Password must have at least 6 characters",
-                        "A senha precisa ter pelo menos 6 caracteres"
-                    ),
-                );
-                return;
+            if !allow_without_password && password.chars().count() < 6 {
+                return fail(tr!(
+                    "Password must have at least 6 characters",
+                    "A senha precisa ter pelo menos 6 caracteres"
+                ));
+            }
+            if allow_without_password && !password.is_empty() && password.chars().count() < 6 {
+                return fail(tr!(
+                    "Password must have at least 6 characters",
+                    "A senha precisa ter pelo menos 6 caracteres"
+                ));
             }
             let Some(client) = client_cell.borrow().as_ref().map(Arc::clone) else {
-                toast(&ui, tr!("Not connected", "Sem conexão"));
-                return;
+                return fail(tr!("Not connected", "Sem conexão"));
             };
-            if let Err(e) = client.create_network(name, &password) {
-                toast(
-                    &ui,
-                    tr!(
-                        "Could not create network: {e}",
-                        "Não foi possível criar rede: {e}"
-                    ),
-                );
+            match client.create_network(name, &password, allow_without_password) {
+                Ok(()) => true,
+                Err(e) => fail(tr!(
+                    "Could not create network: {e}",
+                    "Não foi possível criar rede: {e}"
+                )),
             }
         });
     }
@@ -655,27 +888,94 @@ fn main() {
         let client_cell = client_cell.clone();
         ui.on_join_network(move |name, password| {
             let ui = weak.unwrap();
+            let fail = |msg: String| {
+                ui.set_dialog_error(msg.into());
+                false
+            };
             let name = name.trim();
             if name.is_empty() {
-                toast(&ui, tr!("Network name is required", "Nome da rede é obrigatório"));
-                return;
-            }
-            if password.is_empty() {
-                toast(&ui, tr!("Password is required", "Senha é obrigatória"));
-                return;
+                return fail(tr!("Network name is required", "Nome da rede é obrigatório"));
             }
             let Some(client) = client_cell.borrow().as_ref().map(Arc::clone) else {
-                toast(&ui, tr!("Not connected", "Sem conexão"));
+                return fail(tr!("Not connected", "Sem conexão"));
+            };
+            match client.join_network(name, &password) {
+                Ok(()) => true,
+                Err(e) => fail(tr!(
+                    "Could not join network: {e}",
+                    "Não foi possível entrar na rede: {e}"
+                )),
+            }
+        });
+    }
+    {
+        let weak = ui.as_weak();
+        let client_cell = client_cell.clone();
+        ui.on_update_network(
+            move |id, name, allow_without_password, block_new_members, new_password| {
+                let ui = weak.unwrap();
+                let fail = |msg: String| {
+                    ui.set_dialog_error(msg.into());
+                    false
+                };
+                let name = name.trim();
+                if name.is_empty() {
+                    return fail(tr!("Network name is required", "Nome da rede é obrigatório"));
+                }
+                let Some(guid) = parse_guid(&id) else {
+                    return fail(tr!("Invalid network id", "ID de rede inválido"));
+                };
+                let new_pw = if new_password.is_empty() {
+                    None
+                } else {
+                    if new_password.chars().count() < 6 {
+                        return fail(tr!(
+                            "Password must have at least 6 characters",
+                            "A senha precisa ter pelo menos 6 caracteres"
+                        ));
+                    }
+                    Some(new_password.as_str())
+                };
+                let Some(client) = client_cell.borrow().as_ref().map(Arc::clone) else {
+                    return fail(tr!("Not connected", "Sem conexão"));
+                };
+                match client.update_network(
+                    guid,
+                    name,
+                    allow_without_password,
+                    block_new_members,
+                    new_pw,
+                ) {
+                    Ok(()) => {
+                        setup::save_network_cache(&id, allow_without_password, block_new_members);
+                        true
+                    }
+                    Err(e) => fail(tr!(
+                        "Could not update network: {e}",
+                        "Não foi possível atualizar a rede: {e}"
+                    )),
+                }
+            },
+        );
+    }
+    {
+        let weak = ui.as_weak();
+        let client_cell = client_cell.clone();
+        ui.on_approve_join(move |net_id, node_id| {
+            let ui = weak.unwrap();
+            let (Some(guid), Ok(node)) = (parse_guid(&net_id), node_id.parse::<u64>()) else {
                 return;
             };
-            if let Err(e) = client.join_network(name, &password) {
-                toast(
+            let Some(client) = client_cell.borrow().as_ref().map(Arc::clone) else {
+                toast_error(&ui, tr!("Not connected", "Sem conexão"));
+                return;
+            };
+            match client.approve_join(guid, node) {
+                Ok(()) => toast(&ui, tr!("Approval sent", "Aprovação enviada")),
+                Err(e) => toast_error(
                     &ui,
-                    tr!(
-                        "Could not join network: {e}",
-                        "Não foi possível entrar na rede: {e}"
-                    ),
-                );
+                    tr!("Could not approve: {e}", "Não foi possível aprovar: {e}"),
+                ),
             }
         });
     }
@@ -686,12 +986,73 @@ fn main() {
             let ui = weak.unwrap();
             let Some(guid) = parse_guid(&id) else { return };
             let Some(client) = client_cell.borrow().as_ref().map(Arc::clone) else {
-                toast(&ui, tr!("Not connected", "Sem conexão"));
+                toast_error(&ui, tr!("Not connected", "Sem conexão"));
                 return;
             };
             if let Err(e) = client.leave_network(guid) {
-                toast(&ui, tr!("Could not leave: {e}", "Não foi possível sair: {e}"));
+                toast_error(&ui, tr!("Could not leave: {e}", "Não foi possível sair: {e}"));
             }
+        });
+    }
+    {
+        let weak = ui.as_weak();
+        let client_cell = client_cell.clone();
+        ui.on_delete_network(move |id| {
+            let ui = weak.unwrap();
+            let Some(guid) = parse_guid(&id) else { return };
+            let Some(client) = client_cell.borrow().as_ref().map(Arc::clone) else {
+                toast_error(&ui, tr!("Not connected", "Sem conexão"));
+                return;
+            };
+            if let Err(e) = client.delete_network(guid) {
+                toast_error(
+                    &ui,
+                    tr!(
+                        "Could not delete network: {e}",
+                        "Não foi possível excluir a rede: {e}"
+                    ),
+                );
+            }
+        });
+    }
+    {
+        let weak = ui.as_weak();
+        ui.on_ping_peer(move |ip| {
+            let ui = weak.unwrap();
+            let ip_str = ip.to_string();
+            toast(&ui, format!("Ping {ip_str}…"));
+            let weak_thread = ui.as_weak();
+            std::thread::spawn(move || {
+                let out = Command::new("ping")
+                    .args(["-c", "1", "-W", "2", &ip_str])
+                    .output();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(ui) = weak_thread.upgrade() {
+                        if let Ok(res) = out {
+                            if res.status.success() {
+                                let stdout = String::from_utf8_lossy(&res.stdout);
+                                if let Some(t) = stdout
+                                    .lines()
+                                    .find(|l| l.contains("time="))
+                                    .and_then(|l| l.split("time=").nth(1))
+                                {
+                                    toast(&ui, format!("{ip_str} · {t}"));
+                                    return;
+                                }
+                                toast(&ui, tr!("{} is online", "{} está online", ip_str));
+                            } else {
+                                toast_error(&ui, tr!("{} did not respond to ping", "{} não respondeu ao ping", ip_str));
+                            }
+                        }
+                    }
+                });
+            });
+        });
+    }
+    {
+        ui.on_quit_app(|| {
+            QUITTING.store(true, Ordering::Relaxed);
+            let _ = slint::quit_event_loop();
         });
     }
     {
@@ -699,16 +1060,20 @@ fn main() {
         let client_cell = client_cell.clone();
         ui.on_rename_self(move |name| {
             let ui = weak.unwrap();
+            let fail = |msg: String| {
+                ui.set_dialog_error(msg.into());
+                false
+            };
             let name = name.trim();
             if name.is_empty() {
-                return;
+                return fail(tr!("Name is required", "O nome é obrigatório"));
             }
             let Some(client) = client_cell.borrow().as_ref().map(Arc::clone) else {
-                toast(&ui, tr!("Not connected", "Sem conexão"));
-                return;
+                return fail(tr!("Not connected", "Sem conexão"));
             };
-            if let Err(e) = client.change_alias(name) {
-                toast(&ui, tr!("Could not rename: {e}", "Não foi possível renomear: {e}"));
+            match client.change_alias(name) {
+                Ok(()) => true,
+                Err(e) => fail(tr!("Could not rename: {e}", "Não foi possível renomear: {e}")),
             }
         });
     }
@@ -753,7 +1118,7 @@ fn main() {
                     if let Some(ui) = weak.upgrade() {
                         ui.set_downloading(false);
                         if let Err(e) = result {
-                            toast(&ui, tr!("Download failed: {e}", "O download falhou: {e}"));
+                            toast_error(&ui, tr!("Download failed: {e}", "O download falhou: {e}"));
                         }
                         refresh_setup(&ui);
                     }
@@ -812,7 +1177,7 @@ fn main() {
             c.autostart = on;
             let _ = setup::save(&c);
             if let Err(e) = setup::set_autostart(on) {
-                toast(&weak.unwrap(), e.to_string());
+                toast_error(&weak.unwrap(), e.to_string());
             }
             refresh_setup(&weak.unwrap());
         });
@@ -837,6 +1202,22 @@ fn main() {
     // Status polling -------------------------------------------------------------
     let networks_model: Rc<VecModel<NetInfo>> = Rc::new(VecModel::default());
     ui.set_networks(ModelRc::from(networks_model.clone()));
+    // Networks the user collapsed, by id; kept across model rebuilds.
+    let collapsed: Rc<RefCell<HashSet<SharedString>>> = Rc::default();
+    {
+        let networks_model = networks_model.clone();
+        let collapsed = collapsed.clone();
+        ui.on_toggle_network(move |id| {
+            let mut set = collapsed.borrow_mut();
+            let now = if set.remove(&id) { false } else { set.insert(id.clone()) };
+            for i in 0..networks_model.row_count() {
+                if let Some(mut row) = networks_model.row_data(i).filter(|r| r.id == id) {
+                    row.collapsed = now;
+                    networks_model.set_row_data(i, row);
+                }
+            }
+        });
+    }
     let timer = slint::Timer::default();
     {
         let weak = ui.as_weak();
@@ -879,7 +1260,10 @@ fn main() {
                     ui.set_self_alias(st.self_alias.clone().into());
                 }
             }
-            let rows = network_rows(live.as_ref(), &st.peers);
+            let mut rows = network_rows(live.as_ref(), &st.peers);
+            for row in &mut rows {
+                row.collapsed = collapsed.borrow().contains(&row.id);
+            }
             let sig = rows_signature(&rows);
             if sig != last_sig {
                 last_sig = sig;

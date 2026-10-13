@@ -192,3 +192,107 @@ msgstr "Janela do Radmin"
 msgid "Opens the original Wine window."
 msgstr "Abre a janela original pelo Wine."
 
+msgid "Network"
+msgstr "Rede"
+
+msgid "Your machine"
+msgstr "Sua máquina"
+
+msgid "Online"
+msgstr "Online"
+
+msgid "Offline"
+msgstr "Offline"
+
+msgid "Change name…"
+msgstr "Mudar nome…"
+
+msgid "Exit"
+msgstr "Sair"
+
+msgid "Create network…"
+msgstr "Criar rede…"
+
+msgid "Join network…"
+msgstr "Entrar em rede…"
+
+msgid "Copy IP address"
+msgstr "Copiar endereço IP"
+
+msgid "Copy name"
+msgstr "Copiar nome"
+
+msgid "Ping"
+msgstr "Ping"
+
+msgid "Copy network name"
+msgstr "Copiar nome da rede"
+
+msgid "Leave network"
+msgstr "Sair da rede"
+
+msgid "Delete network"
+msgstr "Excluir rede"
+
+msgid "Delete “{}”?"
+msgstr "Excluir “{}”?"
+
+msgid "The network will be permanently deleted for all members."
+msgstr "A rede será excluída permanentemente para todos os membros."
+
+msgid "Delete"
+msgstr "Excluir"
+
+msgid "Network properties…"
+msgstr "Propriedades da rede…"
+
+msgid "Network properties"
+msgstr "Propriedades da rede"
+
+msgid "Allow join requests without password"
+msgstr "Permitir pedidos de entrada sem senha"
+
+msgid "Password (optional)"
+msgstr "Senha (opcional)"
+
+msgid "Optional (at least 6 characters)"
+msgstr "Opcional (pelo menos 6 caracteres)"
+
+msgid "Password (blank asks the owner to approve)"
+msgstr "Senha (em branco pede aprovação ao dono)"
+
+msgid "Password (if required)"
+msgstr "Senha (se necessária)"
+
+msgid "Block new members"
+msgstr "Bloquear novos membros"
+
+msgid "Change password"
+msgstr "Alterar senha"
+
+msgid "New password"
+msgstr "Nova senha"
+
+msgid "Confirm new password"
+msgstr "Confirmar nova senha"
+
+msgid "Save"
+msgstr "Salvar"
+
+msgid "Could not update network: {e}"
+msgstr "Não foi possível atualizar a rede: {e}"
+
+msgid "Invalid network id"
+msgstr "ID de rede inválido"
+
+msgid "pending"
+msgstr "pendente"
+
+msgid "Approve joining"
+msgstr "Aprovar entrada"
+
+msgid "Approval sent"
+msgstr "Aprovação enviada"
+
+msgid "Could not approve: {e}"
+msgstr "Não foi possível aprovar: {e}"

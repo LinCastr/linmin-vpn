@@ -1,9 +1,11 @@
 [package]
-name = "radmin-wired"
+name = "linmin-vpn"
 version = "0.1.0"
 edition = "2024"
 description = "Native Linux front end for Radmin VPN (via radmin-vpn-linux): tray, no terminal, no sudo prompts"
 license = "GPL-3.0-or-later"
+repository = "https://github.com/LinCastr/linmin-vpn"
+homepage = "https://github.com/LinCastr/linmin-vpn"
 
 [dependencies]
 anyhow = "1"

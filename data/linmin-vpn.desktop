@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Linmin VPN
+GenericName=VPN Client
+Comment=Cliente nativo para Radmin VPN
+Exec=linmin-vpn
+Icon=linmin-vpn
+Terminal=false
+Categories=Network;VPN;Utility;Game;
+StartupWMClass=linmin-vpn

@@ -4,7 +4,7 @@
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -12,10 +12,11 @@ use sha2::{Digest, Sha256};
 
 use crate::vpn::data_dir;
 
-pub const HELPER_PATH: &str = "/usr/local/libexec/radmin-wired/radmin-net";
-pub const POLICY_PATH: &str = "/usr/share/polkit-1/actions/io.github.valcones47.radmin-wired.policy";
+pub const HELPER_PATH: &str = "/usr/local/libexec/linmin-vpn/radmin-net";
+pub const POLICY_PATH: &str = "/usr/share/polkit-1/actions/io.github.lincastr.linmin-vpn.policy";
 const HELPER: &str = include_str!("../data/radmin-net");
-const POLICY: &str = include_str!("../data/io.github.valcones47.radmin-wired.policy");
+const POLICY: &str = include_str!("../data/io.github.lincastr.linmin-vpn.policy");
+const SHIM: &str = include_str!("../data/sudo-shim");
 /// The Wine pipe relay, cross-compiled by `build.rs`.
 const RELAY: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/rvrelay.exe"));
 
@@ -58,7 +59,7 @@ fn config_path() -> PathBuf {
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
         .unwrap_or_else(|| crate::home().join(".config"))
-        .join("radmin-wired/config.json")
+        .join("linmin-vpn/config.json")
 }
 
 pub fn load() -> Config {
@@ -79,6 +80,48 @@ pub fn save(c: &Config) -> Result<()> {
 
 // Helper ---------------------------------------------------------------------
 
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct SavedNetProps {
+    pub allow_without_password: bool,
+    pub block_new_members: bool,
+}
+
+fn networks_cache_path() -> PathBuf {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .unwrap_or_else(|| crate::home().join(".config"))
+        .join("linmin-vpn/networks.json")
+}
+
+pub fn load_networks_cache() -> std::collections::HashMap<String, SavedNetProps> {
+    fs::read_to_string(networks_cache_path())
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+pub fn save_network_cache(id: &str, allow_without_password: bool, block_new_members: bool) {
+    let mut cache = load_networks_cache();
+    cache.insert(
+        id.to_string(),
+        SavedNetProps {
+            allow_without_password,
+            block_new_members,
+        },
+    );
+    let p = networks_cache_path();
+    if let Some(dir) = p.parent() {
+        let _ = fs::create_dir_all(dir);
+    }
+    let tmp = p.with_extension("json.tmp");
+    if let Ok(data) = serde_json::to_string_pretty(&cache) {
+        if fs::write(&tmp, data).is_ok() {
+            let _ = fs::rename(tmp, p);
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum HelperState {
     Missing,
@@ -95,16 +138,134 @@ pub fn helper_state() -> HelperState {
     }
 }
 
+pub fn shim_path() -> PathBuf {
+    data_dir().join("shim/sudo")
+}
+
+pub fn ensure_shim() -> Result<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+    let p = shim_path();
+    let up_to_date = fs::read_to_string(&p).map(|s| s == SHIM).unwrap_or(false);
+    if !up_to_date {
+        if let Some(dir) = p.parent() {
+            fs::create_dir_all(dir)?;
+        }
+        fs::write(&p, SHIM)?;
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o755))?;
+    }
+    Ok(p)
+}
+
+fn is_polkit_agent_running() -> bool {
+    // Verifica se o agente do Quickshell (rice) ou polkit-kde está reportado ativo
+    if let Ok(output) = Command::new("rice-polkit-daemon").arg("status").output() {
+        if let Ok(s) = String::from_utf8(output.stdout) {
+            if s.contains(r#""quickshell_polkit_enabled": true"#)
+                || s.contains(r#""polkit_kde_agent_running": true"#)
+            {
+                return true;
+            }
+        }
+    }
+
+    let Ok(dir) = fs::read_dir("/proc") else { return false };
+    let me = std::process::id() as i32;
+    for entry in dir.flatten() {
+        let Ok(pid) = entry.file_name().to_str().unwrap_or("").parse::<i32>() else { continue };
+        if pid == me {
+            continue;
+        }
+        let cmd = fs::read(format!("/proc/{pid}/cmdline"))
+            .map(|b| String::from_utf8_lossy(&b).replace('\0', " "))
+            .unwrap_or_default();
+        if cmd.is_empty() {
+            continue;
+        }
+        let is_agent = (cmd.contains("polkit") && cmd.contains("agent"))
+            || cmd.contains("polkit-kde")
+            || cmd.contains("polkit-gnome")
+            || cmd.contains("hyprpolkitagent")
+            || cmd.contains("lxpolkit");
+        if is_agent && !cmd.contains("polkitd") {
+            return true;
+        }
+    }
+    false
+}
+
+fn ensure_polkit_agent() {
+    if is_polkit_agent_running() {
+        return;
+    }
+
+    // Tenta rice-polkit-daemon se existir
+    let _ = Command::new("rice-polkit-daemon").arg("ensure").status();
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    if is_polkit_agent_running() {
+        return;
+    }
+
+    // Procura agentes gráficos comuns caso nenhum esteja rodando
+    let candidates = [
+        "/usr/lib/polkit-kde-authentication-agent-1",
+        "/usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1",
+        "/usr/libexec/polkit-gnome-authentication-agent-1",
+        "/usr/lib/hyprpolkitagent",
+        "/usr/lib/polkit-mate-authentication-agent-1",
+        "/usr/bin/lxpolkit",
+    ];
+    for agent in candidates {
+        if Path::new(agent).exists() {
+            let _ = Command::new(agent)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn();
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            break;
+        }
+    }
+}
+
 /// Installs (or removes) the helper and its polkit action with one
 /// administrator prompt.
 pub fn set_helper(install: bool) -> Result<()> {
+    // Se já estiver rodando como root (ex: script de instalação ou sudo), instala diretamente
+    if unsafe { libc::geteuid() == 0 } {
+        use std::os::unix::fs::PermissionsExt;
+        if install {
+            if let Some(parent) = Path::new(HELPER_PATH).parent() {
+                fs::create_dir_all(parent)?;
+            }
+            if let Some(parent) = Path::new(POLICY_PATH).parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(HELPER_PATH, HELPER)?;
+            fs::set_permissions(HELPER_PATH, fs::Permissions::from_mode(0o755))?;
+            fs::write(POLICY_PATH, POLICY)?;
+            fs::set_permissions(POLICY_PATH, fs::Permissions::from_mode(0o644))?;
+            let _ = ensure_shim();
+        } else {
+            let _ = fs::remove_file(HELPER_PATH);
+            let _ = fs::remove_file(POLICY_PATH);
+            if let Some(parent) = Path::new(HELPER_PATH).parent() {
+                let _ = fs::remove_dir(parent);
+            }
+        }
+        return Ok(());
+    }
+
+    // Só inicia agente polkit se nenhum estiver rodando na sessão
+    ensure_polkit_agent();
+
     let status = if install {
         let dir = data_dir().join("install");
         fs::create_dir_all(&dir)?;
-        let (h, p) = (dir.join("radmin-net"), dir.join("radmin-wired.policy"));
+        let (h, p) = (dir.join("radmin-net"), dir.join("linmin-vpn.policy"));
         fs::write(&h, HELPER)?;
         fs::write(&p, POLICY)?;
         let st = Command::new("pkexec")
+            .stdin(Stdio::null())
             .args([
                 "/bin/sh",
                 "-c",
@@ -115,9 +276,11 @@ pub fn set_helper(install: bool) -> Result<()> {
             .args([HELPER_PATH, POLICY_PATH])
             .status();
         let _ = fs::remove_dir_all(&dir);
+        let _ = ensure_shim();
         st
     } else {
         Command::new("pkexec")
+            .stdin(Stdio::null())
             .args(["/bin/sh", "-c", r#"rm -f "$1" "$2"; rmdir "$(dirname "$1")" 2>/dev/null; true"#, "sh"])
             .args([HELPER_PATH, POLICY_PATH])
             .status()
@@ -232,7 +395,7 @@ pub fn fetch_appimage(progress: impl Fn(u64, u64)) -> Result<PathBuf> {
 // Autostart ------------------------------------------------------------------
 
 fn autostart_path() -> PathBuf {
-    config_path().parent().unwrap().with_file_name("autostart").join("radmin-wired.desktop")
+    config_path().parent().unwrap().with_file_name("autostart").join("linmin-vpn.desktop")
 }
 
 pub fn set_autostart(on: bool) -> Result<()> {

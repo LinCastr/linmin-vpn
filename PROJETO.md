@@ -1,4 +1,4 @@
-# PROJETO.md — radmin-wired
+# PROJETO.md — linmin-vpn
 
 Front-end nativo em Linux para o Radmin VPN. Roda o Radmin oficial (Windows) por
 Wine através do projeto **radmin-vpn-linux**, mas substitui a janela do Wine por
@@ -30,18 +30,18 @@ Responda sempre em **português do Brasil**.
 
 - **App Rust + Slint** (`src/`, `ui/app.slint`). Janela pequena e bandeja SNI
   (`ksni`). Tema padrão ou wallust. i18n pt-BR/inglês (`src/i18n.rs`, `tr!`,
-  `lang/pt_BR/LC_MESSAGES/radmin-wired.po`). **Toda string nova precisa dos dois.**
+  `lang/pt_BR/LC_MESSAGES/linmin-vpn.po`). **Toda string nova precisa dos dois.**
 - **Backend** (`src/vpn.rs`): sobe o AppImage do radmin-vpn-linux com `--no-ui`
   (só serviço, sem janela), destacado do terminal; lê estado por `ip`/`/proc`.
 - **Setup** (`src/setup.rs`): baixa o AppImage (fixado, com sha256), config em
-  `~/.config/radmin-wired/config.json`, autostart XDG, instala o helper de root.
+  `~/.config/linmin-vpn/config.json`, autostart XDG, instala o helper de root.
 - **Privilégio sem senha** (`data/`): em vez de rodar o launcher com sudo, um
   helper de root restrito faz só os comandos de rede da `radminvpn0`:
   - `data/radmin-net` — helper. Aceita só comandos sobre `radminvpn0`, IPs
     restritos a 26.x / multicast / broadcast. Recusa rota default, netns, sh.
-    Instalado root em `/usr/local/libexec/radmin-wired/radmin-net`.
-  - `data/io.github.valcones47.radmin-wired.policy` — ação polkit
-    `io.github.valcones47.radmin-wired.net`, `allow_active=yes` (sessão local
+    Instalado root em `/usr/local/libexec/linmin-vpn/radmin-net`.
+  - `data/io.github.lincastr.linmin-vpn.policy` — ação polkit
+    `io.github.lincastr.linmin-vpn.net`, `allow_active=yes` (sessão local
     roda o helper sem senha).
   - `data/sudo-shim` — "sudo" falso. O app o põe primeiro no PATH do AppImage;
     os `sudo ip …` do `run.sh` caem nele e vão ao helper via pkexec. **Não altera
@@ -56,7 +56,7 @@ Responda sempre em **português do Brasil**.
 | Rust (`src/`, `ui/`) | `cargo build --release` | sem erro |
 | helper `data/radmin-net` | `bash -n data/radmin-net` + testar entradas | aceita só os comandos previstos; recusa o resto |
 | visual da janela | snapshot (ver seção 5), conferir a olho | sem esticar sozinho, pequeno |
-| CLI | `./target/release/radmin-wired status` | JSON com phase/ip/peers |
+| CLI | `./target/release/linmin-vpn status` | JSON com phase/ip/peers |
 
 Build release leva ~2min (LTO). Para iterar rápido no visual, `cargo build` (debug).
 
@@ -89,11 +89,11 @@ Build release leva ~2min (LTO). Para iterar rápido no visual, `cargo build` (de
 - **Shell do usuário é fish.** Comandos em sintaxe bash no terminal do usuário
   precisam de `bash -c '...'`. As ferramentas do agente já rodam em bash.
 - **Snapshot do visual sem abrir na tela do usuário:** o app salva um PNG e sai
-  com `RWIRED_SNAPSHOT=arquivo.png`; `RWIRED_SETTINGS=1` abre na tela de
-  configurações; `RWIRED_APP_ID=radmin-wired-test` para casar com uma regra de
+  com `LINMIN_SNAPSHOT=arquivo.png`; `LINMIN_SETTINGS=1` abre na tela de
+  configurações; `LINMIN_APP_ID=linmin-vpn-test` para casar com uma regra de
   janela. Regra temporária no Hyprland para mandar a janela de teste a um
   workspace especial:
-  `hyprctl eval 'hl.window_rule({ name="rwtest", match={ class="^radmin-wired-test$" }, workspace="special:rwtest silent" })'`
+  `hyprctl eval 'hl.window_rule({ name="linmintest", match={ class="^linmin-vpn-test$" }, workspace="special:linmintest silent" })'`
 - **O AppImage, sem helper, pede a senha do sudo.** O "Permitir sem senha" usa
   pkexec; precisa de um **agente polkit gráfico** rodando na sessão (o
   hollow-wired tem `PolkitDialog.qml` no Quickshell). Sem agente, o pkexec fica

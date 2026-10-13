@@ -40,6 +40,7 @@ Responda sempre em **português do Brasil**.
   Os arquivos de regras dos agentes (este, `PROJETO.md`, `RESUMO.md`) e a doc
   interna detalhada ficam em português. A conversa com o usuário é em pt-BR.
 - **Não faça `git push`** sem o usuário pedir. Commit, sim; publicar, só a pedido.
+- **Novos repositórios na organização:** todo repositório novo deve ser criado na organização **LinCastr** (`github.com/LinCastr`), nunca na conta pessoal.
 - **Nunca comite** dados pessoais, tokens, senhas, nem caminhos com `/home/val47`.
   O IP 26.x da VPN, GUIDs de rede e nomes de peers são dados pessoais: não comite.
 - **Não mate processo com `pkill -f <padrao>`:** casa com o próprio shell do

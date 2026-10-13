@@ -3,12 +3,12 @@
  "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
  "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
 <policyconfig>
-  <vendor>radmin-wired</vendor>
-  <vendor_url>https://github.com/Valcones47/radmin-wired</vendor_url>
+  <vendor>linmin-vpn</vendor>
+  <vendor_url>https://github.com/LinCastr/linmin-vpn</vendor_url>
 
   <!-- Lets the active local session configure the radminvpn0 interface without
        a password. The helper only accepts commands on that interface. -->
-  <action id="io.github.valcones47.radmin-wired.net">
+  <action id="io.github.lincastr.linmin-vpn.net">
     <description>Configure the Radmin VPN network interface</description>
     <description xml:lang="pt_BR">Configurar a interface de rede do Radmin VPN</description>
     <message>Radmin VPN needs to configure its network interface</message>
@@ -19,6 +19,6 @@
       <allow_inactive>auth_admin</allow_inactive>
       <allow_active>yes</allow_active>
     </defaults>
-    <annotate key="org.freedesktop.policykit.exec.path">/usr/local/libexec/radmin-wired/radmin-net</annotate>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/local/libexec/linmin-vpn/radmin-net</annotate>
   </action>
 </policyconfig>

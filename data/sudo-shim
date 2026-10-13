@@ -1,12 +1,12 @@
 #!/bin/bash
 # sudo shim for the Radmin VPN launcher (radmin-vpn-linux AppImage).
 #
-# radmin-wired puts the directory holding this file first in the launcher's
+# linmin-vpn puts the directory holding this file first in the launcher's
 # PATH. The launcher's "sudo <command>" calls land here and are forwarded to the
 # privileged helper through pkexec, which the polkit action lets the active
 # session run without a password. Anything the helper does not recognise is
 # refused, so this never grants more than the helper allows.
-HELPER=/usr/local/libexec/radmin-wired/radmin-net
+HELPER=/usr/local/libexec/linmin-vpn/radmin-net
 
 # Drop sudo options; credential checks (-v, -n -v, -A -v, -k) just succeed.
 while [ $# -gt 0 ]; do

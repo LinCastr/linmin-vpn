@@ -1,8 +1,8 @@
 #!/bin/bash
-# radmin-net — privileged helper for radmin-wired.
+# radmin-net — privileged helper for linmin-vpn.
 #
-# Installed root-owned at /usr/local/libexec/radmin-wired/radmin-net and run
-# through pkexec (polkit action io.github.valcones47.radmin-wired.net, which the
+# Installed root-owned at /usr/local/libexec/linmin-vpn/radmin-net and run
+# through pkexec (polkit action io.github.lincastr.linmin-vpn.net, which the
 # active local session may use without a password).
 #
 # It only runs the network commands the Radmin VPN launcher needs, and only on

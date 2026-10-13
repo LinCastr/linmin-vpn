@@ -5,3 +5,6 @@
 /.claude
 spy.log
 spy.txt
+/extracted_icon_raw.bin
+/snapshot_*.png
+/test_*.png
