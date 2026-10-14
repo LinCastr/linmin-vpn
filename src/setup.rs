@@ -157,7 +157,7 @@ pub fn ensure_shim() -> Result<PathBuf> {
 }
 
 fn is_polkit_agent_running() -> bool {
-    // Verifica se o agente do Quickshell (rice) ou polkit-kde está reportado ativo
+    // The hollow-wired rice reports its Quickshell agent (or polkit-kde) here.
     if let Ok(output) = Command::new("rice-polkit-daemon").arg("status").output() {
         if let Ok(s) = String::from_utf8(output.stdout) {
             if s.contains(r#""quickshell_polkit_enabled": true"#)
@@ -198,14 +198,14 @@ fn ensure_polkit_agent() {
         return;
     }
 
-    // Tenta rice-polkit-daemon se existir
+    // The rice's own agent first, if this is the rice.
     let _ = Command::new("rice-polkit-daemon").arg("ensure").status();
     std::thread::sleep(std::time::Duration::from_millis(150));
     if is_polkit_agent_running() {
         return;
     }
 
-    // Procura agentes gráficos comuns caso nenhum esteja rodando
+    // Otherwise the first common graphical agent installed.
     let candidates = [
         "/usr/lib/polkit-kde-authentication-agent-1",
         "/usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1",
@@ -230,7 +230,7 @@ fn ensure_polkit_agent() {
 /// Installs (or removes) the helper and its polkit action with one
 /// administrator prompt.
 pub fn set_helper(install: bool) -> Result<()> {
-    // Se já estiver rodando como root (ex: script de instalação ou sudo), instala diretamente
+    // Already root (install script, packaging): write the files directly.
     if unsafe { libc::geteuid() == 0 } {
         use std::os::unix::fs::PermissionsExt;
         if install {
@@ -255,39 +255,49 @@ pub fn set_helper(install: bool) -> Result<()> {
         return Ok(());
     }
 
-    // Só inicia agente polkit se nenhum estiver rodando na sessão
-    ensure_polkit_agent();
-
-    let status = if install {
-        let dir = data_dir().join("install");
+    let dir = data_dir().join("install");
+    let (h, p) = (dir.join("radmin-net"), dir.join("linmin-vpn.policy"));
+    if install {
         fs::create_dir_all(&dir)?;
-        let (h, p) = (dir.join("radmin-net"), dir.join("linmin-vpn.policy"));
         fs::write(&h, HELPER)?;
         fs::write(&p, POLICY)?;
-        let st = Command::new("pkexec")
-            .stdin(Stdio::null())
-            .args([
+    }
+    let run = || -> Result<std::process::Output> {
+        let mut cmd = Command::new("pkexec");
+        cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
+        if install {
+            cmd.args([
                 "/bin/sh",
                 "-c",
                 r#"install -D -m 0755 -o root -g root "$1" "$3" && install -D -m 0644 -o root -g root "$2" "$4""#,
                 "sh",
             ])
             .args([&h, &p])
-            .args([HELPER_PATH, POLICY_PATH])
-            .status();
-        let _ = fs::remove_dir_all(&dir);
-        let _ = ensure_shim();
-        st
-    } else {
-        Command::new("pkexec")
-            .stdin(Stdio::null())
-            .args(["/bin/sh", "-c", r#"rm -f "$1" "$2"; rmdir "$(dirname "$1")" 2>/dev/null; true"#, "sh"])
-            .args([HELPER_PATH, POLICY_PATH])
-            .status()
+            .args([HELPER_PATH, POLICY_PATH]);
+        } else {
+            cmd.args(["/bin/sh", "-c", r#"rm -f "$1" "$2"; rmdir "$(dirname "$1")" 2>/dev/null; true"#, "sh"])
+                .args([HELPER_PATH, POLICY_PATH]);
+        }
+        cmd.output().context("pkexec")
+    };
+    // Use the session's agent when there is one (KDE, GNOME, Quickshell...).
+    // Only when pkexec finds none, start one and try again: starting a second
+    // agent next to a running one breaks the prompt.
+    let mut out = run();
+    if let Ok(o) = &out
+        && !o.status.success()
+        && String::from_utf8_lossy(&o.stderr).contains("authentication agent")
+    {
+        ensure_polkit_agent();
+        out = run();
     }
-    .context("pkexec")?;
-    if !status.success() {
-        bail!("pkexec exited with {status}");
+    let _ = fs::remove_dir_all(&dir);
+    if install {
+        let _ = ensure_shim();
+    }
+    let out = out?;
+    if !out.status.success() {
+        bail!("pkexec exited with {}: {}", out.status, String::from_utf8_lossy(&out.stderr).trim());
     }
     Ok(())
 }
@@ -327,7 +337,16 @@ pub fn appimage(c: &Config) -> Option<PathBuf> {
         .or_else(|| Some(downloaded_appimage()).filter(|p| p.is_file()))
 }
 
-fn sha256_file(p: &Path) -> Result<String> {
+/// HTTP client for large downloads: no overall deadline, but a stalled
+/// connection fails instead of hanging forever.
+pub fn http_agent() -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_secs(15))
+        .timeout_read(std::time::Duration::from_secs(30))
+        .build()
+}
+
+pub fn sha256_file(p: &Path) -> Result<String> {
     let mut f = fs::File::open(p)?;
     let mut h = Sha256::new();
     let mut buf = vec![0u8; 1 << 16];
@@ -366,7 +385,7 @@ pub fn fetch_appimage(progress: impl Fn(u64, u64)) -> Result<PathBuf> {
     if let Some(src) = local_copy() {
         fs::copy(&src, &part)?;
     } else {
-        let resp = ureq::get(APPIMAGE_URL).call()?;
+        let resp = http_agent().get(APPIMAGE_URL).call()?;
         let total = resp.header("Content-Length").and_then(|s| s.parse().ok()).unwrap_or(0);
         let mut reader = resp.into_reader();
         let mut out = fs::File::create(&part)?;
@@ -382,6 +401,10 @@ pub fn fetch_appimage(progress: impl Fn(u64, u64)) -> Result<PathBuf> {
             progress(done, total);
         }
         out.flush()?;
+        if total > 0 && done != total {
+            let _ = fs::remove_file(&part);
+            bail!("download interrupted ({done} of {total} bytes)");
+        }
     }
     if sha256_file(&part)? != APPIMAGE_SHA256 {
         let _ = fs::remove_file(&part);
@@ -414,16 +437,32 @@ fn is_hyprland() -> bool {
         || crate::home().join(".config/hypr").is_dir()
 }
 
+/// The running binary, also right after a self-update replaced it on disk
+/// (Linux then reports "<path> (deleted)").
+fn exe_path() -> Result<PathBuf> {
+    let exe = std::env::current_exe()?;
+    let s = exe.to_string_lossy();
+    Ok(match s.strip_suffix(" (deleted)") {
+        Some(p) => PathBuf::from(p),
+        None => exe,
+    })
+}
+
+/// Hyprland does not run XDG autostart entries by itself, so the entry also
+/// goes into its config. Only files that already exist are edited.
 fn set_hyprland_autostart(on: bool) -> Result<()> {
     if !is_hyprland() {
         return Ok(());
     }
+    // Absolute path: a session started by the display manager often lacks
+    // ~/.local/bin in its PATH. Single quotes for the shell that runs it.
+    let exe = exe_path()?.to_string_lossy().replace('\'', r"'\''");
 
-    // 1. Hollow-wired rice / Lua Hyprland provider (usa user-binds.lua)
+    // 1. hollow-wired rice (Lua config, user-binds.lua)
     let user_binds = user_binds_path();
-    let hypr_dir = crate::home().join(".config/hypr");
-    if user_binds.is_file() || hypr_dir.join("hyprland.lua").is_file() {
+    if user_binds.is_file() {
         let content = fs::read_to_string(&user_binds).unwrap_or_default();
+        let lua_exe = exe.replace('\\', "\\\\").replace('"', "\\\"");
         let marker_start = "-- >>> linmin-vpn autostart >>>";
         let marker_end = "-- <<< linmin-vpn autostart <<<";
         let mut lines: Vec<&str> = Vec::new();
@@ -447,7 +486,7 @@ fn set_hyprland_autostart(on: bool) -> Result<()> {
                 new_content.push('\n');
             }
             new_content.push_str(&format!(
-                "{marker_start}\nhl.on(\"hyprland.start\", function()\n    hl.exec_cmd(\"linmin-vpn --tray\")\nend)\n{marker_end}\n"
+                "{marker_start}\nhl.on(\"hyprland.start\", function()\n    hl.exec_cmd(\"'{lua_exe}' --tray\")\nend)\n{marker_end}\n"
             ));
         }
         if new_content != content {
@@ -456,7 +495,7 @@ fn set_hyprland_autostart(on: bool) -> Result<()> {
         return Ok(());
     }
 
-    // 2. Hyprland padrão com hyprland.conf (fora do rice)
+    // 2. Plain Hyprland (hyprland.conf)
     let conf = hyprland_conf_path();
     if conf.is_file() {
         let content = fs::read_to_string(&conf).unwrap_or_default();
@@ -483,7 +522,7 @@ fn set_hyprland_autostart(on: bool) -> Result<()> {
                 new_content.push('\n');
             }
             new_content.push_str(&format!(
-                "{marker_start}\nexec-once = linmin-vpn --tray\n{marker_end}\n"
+                "{marker_start}\nexec-once = '{exe}' --tray\n{marker_end}\n"
             ));
         }
         if new_content != content {
@@ -499,7 +538,7 @@ pub fn set_autostart(on: bool) -> Result<()> {
     if !on {
         let _ = fs::remove_file(p);
     } else {
-        let exe = std::env::current_exe()?;
+        let exe = exe_path()?;
         fs::create_dir_all(p.parent().unwrap())?;
         fs::write(
             p,

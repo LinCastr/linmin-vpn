@@ -131,6 +131,17 @@ pub fn start(appimage: &Path, use_helper: bool) -> Result<()> {
     if r.pid.is_some() {
         return Ok(());
     }
+    // Started meanwhile by another process (`linmin-vpn up`): take it over
+    // instead of launching a second service.
+    if let Some(pid) = fs::read_to_string(pid_file()).ok().and_then(|s| s.trim().parse().ok())
+        && alive(pid)
+        && cmdline(pid).contains("AppImage")
+    {
+        r.pid = Some(pid);
+        r.failed = None;
+        r.stop_requested = None;
+        return Ok(());
+    }
     let dir = data_dir();
     fs::create_dir_all(&dir)?;
     let mut path = std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".into());

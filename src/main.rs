@@ -34,6 +34,27 @@ pub fn home() -> PathBuf {
     std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/"))
 }
 
+/// Takes the single-instance lock, held for the life of the process. `None`
+/// when another instance already holds it.
+fn instance_lock() -> Option<std::fs::File> {
+    use std::os::fd::AsRawFd;
+    let path = socket_path().with_extension("lock");
+    let f = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(path).ok()?;
+    (unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0).then_some(f)
+}
+
+/// Asks the running instance to show its window. It may still be starting
+/// (lock taken, socket not bound yet), so retry for a moment.
+fn notify_running_instance(sock: &std::path::Path, tray_only: bool) {
+    for _ in 0..20 {
+        if let Ok(mut s) = UnixStream::connect(sock) {
+            let _ = s.write_all(if tray_only { b"noop" } else { b"show" });
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+}
+
 fn socket_path() -> PathBuf {
     std::env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
@@ -420,7 +441,11 @@ fn parse_guid(s: &str) -> Option<[u8; 16]> {
 // Helpers ----------------------------------------------------------------------
 
 fn copy_text(text: &str) {
-    for (cmd, args) in [("wl-copy", &[][..]), ("xclip", &["-selection", "clipboard"][..])] {
+    let wayland = ("wl-copy", &[][..]);
+    let x11 = ("xclip", &["-selection", "clipboard"][..]);
+    // wl-copy spawns fine on X11 and then fails, so pick by session type.
+    let order = if std::env::var_os("WAYLAND_DISPLAY").is_some() { [wayland, x11] } else { [x11, wayland] };
+    for (cmd, args) in order {
         if let Ok(mut child) = Command::new(cmd).args(args).stdin(Stdio::piped()).spawn() {
             if let Some(mut stdin) = child.stdin.take() {
                 let _ = stdin.write_all(text.as_bytes());
@@ -588,7 +613,16 @@ fn show_toast(ui: &AppWindow, text: String, error: bool) {
 fn start_vpn(ui: &AppWindow) {
     vpn::clear_failure();
     let cfg = setup::load();
-    let Some(app) = setup::appimage(&cfg) else { return };
+    let Some(app) = setup::appimage(&cfg) else {
+        toast_error(
+            ui,
+            tr!(
+                "Radmin VPN is not installed yet: download it in Settings",
+                "O Radmin VPN ainda não foi instalado: baixe em Configurações"
+            ),
+        );
+        return;
+    };
     if setup::helper_state() != setup::HelperState::Ok {
         ui.set_busy(true);
         let weak = ui.as_weak();
@@ -756,8 +790,8 @@ fn cli(args: &[String]) -> Option<i32> {
 fn init_window() -> AppWindow {
     let start = std::time::Instant::now();
     loop {
-        // No boot inicial, o processo pode subir milissegundos antes das variáveis
-        // WAYLAND_DISPLAY/DISPLAY serem propagadas. Procuramos o socket ativo.
+        // At login the process may start before WAYLAND_DISPLAY/DISPLAY reach
+        // its environment. Look for the compositor's socket instead.
         if std::env::var_os("WAYLAND_DISPLAY").is_none() && std::env::var_os("DISPLAY").is_none() {
             if let Ok(runtime) = std::env::var("XDG_RUNTIME_DIR") {
                 if let Ok(entries) = std::fs::read_dir(&runtime) {
@@ -779,7 +813,10 @@ fn init_window() -> AppWindow {
             Err(_e) if start.elapsed() < std::time::Duration::from_secs(6) => {
                 std::thread::sleep(std::time::Duration::from_millis(200));
             }
-            Err(e) => panic!("window: Could not initialize backend: {e}"),
+            Err(e) => {
+                eprintln!("linmin-vpn: could not open a window (no display?): {e}");
+                std::process::exit(1);
+            }
         }
     }
 }
@@ -794,12 +831,21 @@ fn main() {
     }
     let snapshot = std::env::var("LINMIN_SNAPSHOT").is_ok();
 
-    // One instance: a second launch just shows the first one's window.
+    // One instance: a second launch just shows the first one's window. The
+    // lock decides who is first (no race between two launches at login); the
+    // socket only carries the "show" request.
     let sock = socket_path();
-    if !snapshot && let Ok(mut s) = UnixStream::connect(&sock) {
-        let _ = s.write_all(if tray_only { b"noop" } else { b"show" });
-        return;
-    }
+    let _instance_lock = if snapshot {
+        None
+    } else {
+        match instance_lock() {
+            Some(f) => Some(f),
+            None => {
+                notify_running_instance(&sock, tray_only);
+                return;
+            }
+        }
+    };
     let listener = if snapshot { None } else { let _ = std::fs::remove_file(&sock); UnixListener::bind(&sock).ok() };
 
     let ui = init_window();
@@ -836,12 +882,19 @@ fn main() {
     }
     vpn::adopt();
 
-    let tray = (!snapshot).then(|| ksni::blocking::TrayMethods::spawn(Tray {
-        ui: ui.as_weak(),
-        phase: vpn::Phase::Off,
-        ip: String::new(),
-    })
-    .ok()).flatten();
+    // At login the bar that hosts the tray (StatusNotifierWatcher) may start
+    // after us; without assume_sni_available the spawn fails and the app would
+    // run trayless. With it, the icon shows up once the watcher appears.
+    let tray = (!snapshot)
+        .then(|| {
+            ksni::blocking::TrayMethods::assume_sni_available(
+                Tray { ui: ui.as_weak(), phase: vpn::Phase::Off, ip: String::new() },
+                true,
+            )
+            .spawn()
+            .ok()
+        })
+        .flatten();
     // Without a tray to come back from, closing the window has to quit.
     let has_tray = tray.is_some();
     ui.window().on_close_requested(move || {
@@ -1446,8 +1499,19 @@ fn main() {
     }
 
     let cfg = setup::load();
-    if cfg.connect_on_login && !vpn::running() {
-        start_vpn(&ui);
+    // At login, give the session a moment (polkit agent, tray host) before
+    // connecting: installing or updating the helper needs the agent's dialog.
+    let connect_timer = slint::Timer::default();
+    if cfg.connect_on_login && !snapshot {
+        let weak = ui.as_weak();
+        let delay = if tray_only { Duration::from_secs(5) } else { Duration::ZERO };
+        connect_timer.start(slint::TimerMode::SingleShot, delay, move || {
+            if let Some(ui) = weak.upgrade()
+                && !vpn::running()
+            {
+                start_vpn(&ui);
+            }
+        });
     }
     if !tray_only || !has_tray {
         let _ = ui.window().show();

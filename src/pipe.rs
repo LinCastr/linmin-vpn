@@ -198,8 +198,12 @@ impl Drop for Client {
         self.alive.store(false, Ordering::Relaxed);
         // Closing stdin makes the relay's input pump exit; then kill the child
         // so Wine does not leave a lingering process.
+        // Reap off-thread: Drop runs on the UI thread on every resync.
         let _ = self.child.kill();
-        let _ = self.child.wait();
+        let pid = self.child.id() as i32;
+        thread::spawn(move || unsafe {
+            libc::waitpid(pid, std::ptr::null_mut(), 0);
+        });
     }
 }
 
