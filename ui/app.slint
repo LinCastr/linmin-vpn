@@ -493,6 +493,14 @@ export component AppWindow inherits Window {
     in property <bool> autostart;
     in property <bool> connect-on-login;
 
+    // Update
+    in-out property <bool> update-available: false;
+    in property <string> current-version: "v0.1.1";
+    in property <string> available-version: "";
+    in-out property <bool> show-update-dialog: false;
+    in-out property <bool> updating: false;
+    in property <float> update-progress: 0.0;
+
     callback toggle-vpn;
     callback open-radmin;
     callback create-network(string, string, bool) -> bool;
@@ -515,6 +523,8 @@ export component AppWindow inherits Window {
     callback set-connect-on-login(bool);
     callback open-log;
     callback quit-app;
+    callback check-for-updates;
+    callback perform-update;
 
     // Error shown inside the open dialog (set by Rust when it rejects the input).
     in-out property <string> dialog-error;
@@ -536,6 +546,7 @@ export component AppWindow inherits Window {
         root.show-delete-dialog = false;
         root.show-rename-dialog = false;
         root.show-props-dialog = false;
+        root.show-update-dialog = false;
         root.dialog-error = "";
     }
     function open-create-dialog() {
@@ -656,6 +667,43 @@ export component AppWindow inherits Window {
                                 root.context-y = self.absolute-position.y + self.height + 4px;
                                 root.show-menu-network = true;
                             }
+                        }
+                    }
+                }
+            }
+            if !root.show-settings: Rectangle {
+                height: 20px;
+                border-radius: 10px;
+                background: root.update-available ? (upd-ta.has-hover ? #22c55e28 : #22c55e14) : (upd-ta.has-hover ? Theme.raised : transparent);
+                border-width: 1px;
+                border-color: root.update-available ? #22c55e70 : (upd-ta.has-hover ? Theme.line : transparent);
+                HorizontalLayout {
+                    padding-left: 7px;
+                    padding-right: 7px;
+                    spacing: 5px;
+                    alignment: center;
+                    Rectangle {
+                        width: 6px;
+                        height: 6px;
+                        border-radius: 3px;
+                        background: root.update-available ? Theme.ok : Theme.faint;
+                        y: (parent.height - self.height) / 2;
+                    }
+                    Text {
+                        text: root.update-available ? (root.available-version != "" ? root.available-version : @tr("Update")) : root.current-version;
+                        font-size: 11px;
+                        font-weight: root.update-available ? 600 : 400;
+                        color: root.update-available ? Theme.ok : Theme.dim;
+                        vertical-alignment: center;
+                    }
+                }
+                upd-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        if root.update-available {
+                            root.show-update-dialog = true;
+                        } else {
+                            root.check-for-updates();
                         }
                     }
                 }
@@ -1532,6 +1580,50 @@ export component AppWindow inherits Window {
             text: @tr("Passwords do not match");
             color: Theme.error;
             font-size: 11px;
+        }
+    }
+
+    if root.show-update-dialog: Dialog {
+        title: @tr("Update Available");
+        accept-text: root.updating ? @tr("Updating…") : @tr("Update Now");
+        accept-enabled: !root.updating;
+        focus-self: true;
+        accepted => { root.perform-update(); }
+        cancelled => { if !root.updating { root.show-update-dialog = false; } }
+
+        VerticalLayout {
+            spacing: 10px;
+            Text {
+                text: @tr("A new version ({}) is available! Your current version is {}.", root.available-version, root.current-version);
+                color: Theme.text;
+                font-size: 13px;
+                wrap: word-wrap;
+            }
+            Text {
+                text: @tr("Do you want to download and install the update now?");
+                color: Theme.dim;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+            if root.updating: VerticalLayout {
+                spacing: 6px;
+                Rectangle {
+                    height: 4px;
+                    border-radius: 2px;
+                    background: Theme.raised;
+                    Rectangle {
+                        x: 0;
+                        width: parent.width * root.update-progress;
+                        border-radius: 2px;
+                        background: Theme.ok;
+                    }
+                }
+                Text {
+                    text: @tr("Downloading update…");
+                    color: Theme.dim;
+                    font-size: 11px;
+                }
+            }
         }
     }
 }

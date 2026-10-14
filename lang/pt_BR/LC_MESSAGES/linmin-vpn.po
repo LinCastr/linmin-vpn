@@ -296,3 +296,24 @@ msgstr "Aprovação enviada"
 
 msgid "Could not approve: {e}"
 msgstr "Não foi possível aprovar: {e}"
+
+msgid "Update Available"
+msgstr "Atualização disponível"
+
+msgid "Update Now"
+msgstr "Atualizar agora"
+
+msgid "Updating…"
+msgstr "Atualizando…"
+
+msgid "Update"
+msgstr "Atualização"
+
+msgid "A new version ({}) is available! Your current version is {}."
+msgstr "Uma nova versão ({}) está disponível! Sua versão atual é {}."
+
+msgid "Do you want to download and install the update now?"
+msgstr "Deseja baixar e instalar a atualização agora?"
+
+msgid "Downloading update…"
+msgstr "Baixando atualização…"

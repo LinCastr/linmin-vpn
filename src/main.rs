@@ -12,6 +12,7 @@ mod proto;
 mod setup;
 mod state;
 mod theme;
+mod update;
 mod vpn;
 
 use std::cell::RefCell;
@@ -779,6 +780,29 @@ fn main() {
     if setup::load().autostart {
         let _ = setup::set_autostart(true);
     }
+    ui.set_current_version(update::CURRENT_VERSION.into());
+    if !snapshot {
+        let upd_weak = ui.as_weak();
+        std::thread::spawn(move || {
+            if let Ok(Some(tag)) = update::check_for_update() {
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(ui) = upd_weak.upgrade() {
+                        ui.set_update_available(true);
+                        ui.set_available_version(tag.into());
+                    }
+                });
+            }
+        });
+    }
+    if std::env::var("LINMIN_TEST_UPDATE").is_ok() {
+        ui.set_update_available(true);
+        ui.set_available_version("v0.1.2".into());
+    }
+    if std::env::var("LINMIN_TEST_UPDATE_DIALOG").is_ok() {
+        ui.set_update_available(true);
+        ui.set_available_version("v0.1.2".into());
+        ui.set_show_update_dialog(true);
+    }
     vpn::adopt();
 
     let tray = (!snapshot).then(|| ksni::blocking::TrayMethods::spawn(Tray {
@@ -1204,6 +1228,100 @@ fn main() {
             .stderr(Stdio::null())
             .spawn();
     });
+    {
+        let weak = ui.as_weak();
+        ui.on_check_for_updates(move || {
+            let ui = weak.unwrap();
+            toast(&ui, tr!("Checking for updates…", "Verificando atualizações…"));
+            let weak = ui.as_weak();
+            std::thread::spawn(move || {
+                match update::check_for_update() {
+                    Ok(Some(tag)) => {
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(ui) = weak.upgrade() {
+                                ui.set_update_available(true);
+                                ui.set_available_version(tag.into());
+                                ui.set_show_update_dialog(true);
+                            }
+                        });
+                    }
+                    Ok(None) => {
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(ui) = weak.upgrade() {
+                                toast(
+                                    &ui,
+                                    tr!(
+                                        "You are on the latest version ({})",
+                                        "Você está na versão mais recente ({})",
+                                        update::CURRENT_VERSION
+                                    ),
+                                );
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(ui) = weak.upgrade() {
+                                toast_error(
+                                    &ui,
+                                    tr!(
+                                        "Could not check for updates: {e}",
+                                        "Não foi possível verificar atualizações: {e}"
+                                    ),
+                                );
+                            }
+                        });
+                    }
+                }
+            });
+        });
+    }
+    {
+        let weak = ui.as_weak();
+        ui.on_perform_update(move || {
+            let ui = weak.unwrap();
+            ui.set_updating(true);
+            ui.set_update_progress(0.0);
+            let target_ver = ui.get_available_version().to_string();
+            let weak = ui.as_weak();
+            std::thread::spawn(move || {
+                let w = weak.clone();
+                let result = update::apply_update(&target_ver, move |progress| {
+                    let w = w.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(ui) = w.upgrade() {
+                            ui.set_update_progress(progress);
+                        }
+                    });
+                });
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(ui) = weak.upgrade() {
+                        ui.set_updating(false);
+                        ui.set_show_update_dialog(false);
+                        match result {
+                            Ok(new_ver) => {
+                                ui.set_update_available(false);
+                                ui.set_current_version(new_ver.into());
+                                toast(
+                                    &ui,
+                                    tr!(
+                                        "Updated successfully! Restart the app to apply.",
+                                        "Atualizado com sucesso! Reinicie o aplicativo para aplicar."
+                                    ),
+                                );
+                            }
+                            Err(e) => {
+                                toast_error(
+                                    &ui,
+                                    tr!("Update failed: {e}", "Falha ao atualizar: {e}"),
+                                );
+                            }
+                        }
+                    }
+                });
+            });
+        });
+    }
 
     // Status polling -------------------------------------------------------------
     let networks_model: Rc<VecModel<NetInfo>> = Rc::new(VecModel::default());
