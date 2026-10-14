@@ -1,6 +1,6 @@
 [package]
 name = "linmin-vpn"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 description = "Native Linux front end for Radmin VPN (via radmin-vpn-linux): tray, no terminal, no sudo prompts"
 license = "GPL-3.0-or-later"
