@@ -85,34 +85,17 @@ component SignalBars inherits Rectangle {
     }
 }
 
-// Ícone discreto para nós offline com cruz ✕ cinza, fiel ao Radmin original
+// Offline node: a plain grey cross, as in the original Radmin.
 component OfflineIcon inherits Rectangle {
     width: 14px;
     height: 12px;
-    HorizontalLayout {
-        spacing: 2px;
-        alignment: start;
-        Text {
-            text: "✕";
-            font-size: 10px;
-            font-weight: 700;
-            color: Theme.faint;
-            vertical-alignment: center;
-        }
-        Rectangle {
-            width: 2px;
-            height: 4px;
-            y: parent.height - self.height;
-            border-radius: 1px;
-            background: Theme.line.brighter(40%);
-        }
-        Rectangle {
-            width: 2px;
-            height: 7px;
-            y: parent.height - self.height;
-            border-radius: 1px;
-            background: Theme.line.brighter(40%);
-        }
+    Text {
+        text: "✕";
+        font-size: 10px;
+        font-weight: 700;
+        color: Theme.faint;
+        horizontal-alignment: center;
+        vertical-alignment: center;
     }
 }
 
@@ -246,7 +229,7 @@ component Segmented inherits Rectangle {
         for opt[i] in root.options: Rectangle {
             border-radius: 4px;
             background: i == root.current ? Theme.raised : transparent;
-            Text {
+            opt-label := Text {
                 text: opt;
                 font-size: 12px;
                 color: i == root.current ? Theme.text : Theme.dim;
@@ -257,7 +240,7 @@ component Segmented inherits Rectangle {
                 mouse-cursor: pointer;
                 clicked => { root.picked(i); }
             }
-            min-width: 60px;
+            min-width: max(56px, opt-label.preferred-width + 14px);
         }
     }
 }
@@ -413,7 +396,7 @@ export component AppWindow inherits Window {
     icon: @image-url("../data/linmin-vpn.png");
     preferred-width: 330px;
     preferred-height: 500px;
-    min-width: 280px;
+    min-width: 300px;
     min-height: 400px;
     background: Theme.bg;
     default-font-size: 13px;
@@ -809,59 +792,39 @@ export component AppWindow inherits Window {
                             color: Theme.text;
                             vertical-alignment: center;
                         }
+                        // Clicking the address copies it (a toast confirms).
                         HorizontalLayout {
-                            spacing: 6px;
-                            Text {
-                                text: root.ip != "" ? root.ip : "—";
-                                font-size: 13px;
-                                font-family: "monospace";
-                                color: root.ip != "" ? Theme.text : Theme.faint;
-                                vertical-alignment: center;
-                            }
-                            if root.ip != "": Rectangle {
+                            alignment: start;
+                            Rectangle {
                                 border-radius: 3px;
-                                background: cta.has-hover ? Theme.hover : transparent;
-                                height: 16px;
+                                background: cta.has-hover && root.ip != "" ? Theme.hover : transparent;
                                 HorizontalLayout {
-                                    padding-left: 4px;
-                                    padding-right: 4px;
+                                    padding-left: 2px;
+                                    padding-right: 2px;
                                     Text {
-                                        text: @tr("copy");
-                                        font-size: 10px;
-                                        color: Theme.dim;
+                                        text: root.ip != "" ? root.ip : "—";
+                                        font-size: 13px;
+                                        font-family: "monospace";
+                                        color: root.ip != "" ? Theme.text : Theme.faint;
                                         vertical-alignment: center;
                                     }
                                 }
                                 cta := TouchArea {
+                                    enabled: root.ip != "";
                                     mouse-cursor: pointer;
                                     clicked => { root.copy(root.ip); }
                                 }
                             }
                         }
-                        HorizontalLayout {
-                            alignment: start;
-                            Rectangle {
-                                border-radius: 4px;
-                                background: root.phase == 2 ? Theme.accent.darker(70%) : root.phase == 1 ? Theme.warn.darker(70%) : Theme.raised;
-                                border-width: 1px;
-                                border-color: root.phase == 2 ? Theme.accent : root.phase == 1 ? Theme.warn : Theme.line;
-                                height: 18px;
-                                HorizontalLayout {
-                                    padding-left: 6px;
-                                    padding-right: 6px;
-                                    Text {
-                                        text: root.phase == 2 ? @tr("Online")
-                                            : root.phase == 1 ? (root.phase-detail != "" ? root.phase-detail : @tr("Connecting…"))
-                                            : root.phase == 3 ? @tr("Turning off…")
-                                            : (root.phase-detail != "" ? root.phase-detail : @tr("Offline"));
-                                        font-size: 10px;
-                                        font-weight: 600;
-                                        color: root.phase == 2 ? Theme.accent : root.phase == 1 ? Theme.warn : Theme.dim;
-                                        vertical-alignment: center;
-                                        horizontal-alignment: center;
-                                    }
-                                }
-                            }
+                        Text {
+                            text: root.phase == 2 ? @tr("Online")
+                                : root.phase == 1 ? (root.phase-detail != "" ? root.phase-detail : @tr("Connecting…"))
+                                : root.phase == 3 ? @tr("Turning off…")
+                                : (root.phase-detail != "" ? root.phase-detail : @tr("Offline"));
+                            font-size: 11px;
+                            color: root.phase == 1 ? Theme.warn : root.phase == 4 ? Theme.error : Theme.dim;
+                            overflow: elide;
+                            vertical-alignment: center;
                         }
                     }
                 }
@@ -1097,6 +1060,8 @@ export component AppWindow inherits Window {
         if root.show-settings: ScrollView {
             vertical-stretch: 1;
             VerticalLayout {
+                // Room for the scrollbar so it never covers the controls.
+                padding-right: 12px;
                 spacing: 4px;
                 alignment: start;
                 SectionLabel { text: @tr("APPEARANCE"); }
@@ -1138,12 +1103,12 @@ export component AppWindow inherits Window {
                 Divider { }
                 SectionLabel { text: @tr("PERMISSIONS"); }
                 Row {
-                    title: @tr("Without password");
+                    title: @tr("Turn on without a password");
                     hint: root.helper-state == 2
-                        ? @tr("Only the radminvpn0 interface can be configured.")
-                        : @tr("Asks for the administrator password on each start.");
+                        ? @tr("Only changes the VPN interface.")
+                        : @tr("Asks for the admin password.");
                     Button {
-                        text: root.helper-state == 2 ? @tr("Remove") : @tr("Allow");
+                        text: root.helper-state == 2 ? @tr("Uninstall") : @tr("Allow");
                         enabled: !root.busy;
                         clicked => {
                             if root.helper-state == 2 { root.remove-helper(); } else { root.install-helper(); }

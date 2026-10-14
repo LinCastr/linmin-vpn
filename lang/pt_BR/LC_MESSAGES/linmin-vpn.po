@@ -15,8 +15,8 @@ msgstr "Permitir sem senha"
 msgid "APPEARANCE"
 msgstr "APARÊNCIA"
 
-msgid "Asks for the administrator password on each start."
-msgstr "Pede a senha de administrador a cada vez que liga."
+msgid "Asks for the admin password."
+msgstr "Pede a senha de administrador."
 
 msgid "Back"
 msgstr "Voltar"
@@ -29,9 +29,6 @@ msgstr "Conectada"
 
 msgid "Connecting…"
 msgstr "Conectando…"
-
-msgid "copy"
-msgstr "copiar"
 
 msgid "Copy"
 msgstr "Copiar"
@@ -66,8 +63,8 @@ msgstr "Nenhuma paleta do wallust encontrada"
 msgid "Off"
 msgstr "Desligada"
 
-msgid "Only the radminvpn0 interface can be configured."
-msgstr "Só a interface radminvpn0 pode ser configurada."
+msgid "Only changes the VPN interface."
+msgstr "Só altera a interface da VPN."
 
 msgid "Open"
 msgstr "Abrir"
@@ -77,9 +74,6 @@ msgstr "PERMISSÕES"
 
 msgid "Radmin VPN for Linux is not installed yet."
 msgstr "O Radmin VPN para Linux ainda não está instalado."
-
-msgid "Remove"
-msgstr "Remover"
 
 msgid "SEEN ON THE NETWORK"
 msgstr "VISTOS NA REDE"
@@ -117,8 +111,8 @@ msgstr "Ligue a VPN para ver quem está por perto."
 msgid "Update"
 msgstr "Atualizar"
 
-msgid "Without password"
-msgstr "Sem senha"
+msgid "Turn on without a password"
+msgstr "Ligar sem pedir senha"
 
 msgid "YOUR ADDRESS"
 msgstr "SEU ENDEREÇO"
@@ -317,3 +311,6 @@ msgstr "Deseja baixar e instalar a atualização agora?"
 
 msgid "Downloading update…"
 msgstr "Baixando atualização…"
+
+msgid "Uninstall"
+msgstr "Desinstalar"
