@@ -398,20 +398,117 @@ fn autostart_path() -> PathBuf {
     config_path().parent().unwrap().with_file_name("autostart").join("linmin-vpn.desktop")
 }
 
+fn user_binds_path() -> PathBuf {
+    crate::home().join(".config/hypr/user-binds.lua")
+}
+
+fn hyprland_conf_path() -> PathBuf {
+    crate::home().join(".config/hypr/hyprland.conf")
+}
+
+fn is_hyprland() -> bool {
+    std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some()
+        || std::env::var("XDG_CURRENT_DESKTOP")
+            .map(|d| d.to_ascii_lowercase().contains("hyprland"))
+            .unwrap_or(false)
+        || crate::home().join(".config/hypr").is_dir()
+}
+
+fn set_hyprland_autostart(on: bool) -> Result<()> {
+    if !is_hyprland() {
+        return Ok(());
+    }
+
+    // 1. Hollow-wired rice / Lua Hyprland provider (usa user-binds.lua)
+    let user_binds = user_binds_path();
+    let hypr_dir = crate::home().join(".config/hypr");
+    if user_binds.is_file() || hypr_dir.join("hyprland.lua").is_file() {
+        let content = fs::read_to_string(&user_binds).unwrap_or_default();
+        let marker_start = "-- >>> linmin-vpn autostart >>>";
+        let marker_end = "-- <<< linmin-vpn autostart <<<";
+        let mut lines: Vec<&str> = Vec::new();
+        let mut in_block = false;
+        for line in content.lines() {
+            if line.trim() == marker_start {
+                in_block = true;
+                continue;
+            }
+            if line.trim() == marker_end {
+                in_block = false;
+                continue;
+            }
+            if !in_block {
+                lines.push(line);
+            }
+        }
+        let mut new_content = lines.join("\n");
+        if on {
+            if !new_content.ends_with('\n') && !new_content.is_empty() {
+                new_content.push('\n');
+            }
+            new_content.push_str(&format!(
+                "{marker_start}\nhl.exec_cmd(\"linmin-vpn --tray\")\n{marker_end}\n"
+            ));
+        }
+        if new_content != content {
+            fs::write(&user_binds, new_content)?;
+        }
+        return Ok(());
+    }
+
+    // 2. Hyprland padrão com hyprland.conf (fora do rice)
+    let conf = hyprland_conf_path();
+    if conf.is_file() {
+        let content = fs::read_to_string(&conf).unwrap_or_default();
+        let marker_start = "# >>> linmin-vpn autostart >>>";
+        let marker_end = "# <<< linmin-vpn autostart <<<";
+        let mut lines: Vec<&str> = Vec::new();
+        let mut in_block = false;
+        for line in content.lines() {
+            if line.trim() == marker_start {
+                in_block = true;
+                continue;
+            }
+            if line.trim() == marker_end {
+                in_block = false;
+                continue;
+            }
+            if !in_block {
+                lines.push(line);
+            }
+        }
+        let mut new_content = lines.join("\n");
+        if on {
+            if !new_content.ends_with('\n') && !new_content.is_empty() {
+                new_content.push('\n');
+            }
+            new_content.push_str(&format!(
+                "{marker_start}\nexec-once = linmin-vpn --tray\n{marker_end}\n"
+            ));
+        }
+        if new_content != content {
+            fs::write(&conf, new_content)?;
+        }
+    }
+
+    Ok(())
+}
+
 pub fn set_autostart(on: bool) -> Result<()> {
     let p = autostart_path();
     if !on {
         let _ = fs::remove_file(p);
-        return Ok(());
+    } else {
+        let exe = std::env::current_exe()?;
+        fs::create_dir_all(p.parent().unwrap())?;
+        fs::write(
+            p,
+            format!(
+                "[Desktop Entry]\nType=Application\nName=Linmin VPN\nExec=\"{}\" --tray\nIcon=network-vpn\nTerminal=false\nX-GNOME-Autostart-enabled=true\n",
+                exe.display()
+            ),
+        )?;
     }
-    let exe = std::env::current_exe()?;
-    fs::create_dir_all(p.parent().unwrap())?;
-    fs::write(
-        p,
-        format!(
-            "[Desktop Entry]\nType=Application\nName=Linmin VPN\nExec=\"{}\" --tray\nIcon=network-vpn\nTerminal=false\nX-GNOME-Autostart-enabled=true\n",
-            exe.display()
-        ),
-    )?;
+    let _ = set_hyprland_autostart(on);
     Ok(())
 }

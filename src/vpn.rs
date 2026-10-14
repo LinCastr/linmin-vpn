@@ -141,6 +141,7 @@ pub fn start(appimage: &Path, use_helper: bool) -> Result<()> {
     }
     let child = Command::new(appimage)
         .arg("--no-ui")
+        .arg("--no-broadcast-routes")
         // Without this the AppRun reopens itself inside a terminal emulator.
         .env("RADMIN_IN_TERM", "1")
         .env("PATH", path)

@@ -157,6 +157,7 @@ impl Client {
     }
 
     pub fn change_alias(&self, alias: &str) -> Result<()> {
+        self.state.lock().unwrap().self_alias = alias.to_string();
         self.send(&msg::change_alias(self.next_id(), alias))
     }
 

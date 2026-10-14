@@ -776,6 +776,9 @@ fn main() {
     i18n::apply(&setup::load().language);
     apply_theme(&ui);
     refresh_setup(&ui);
+    if setup::load().autostart {
+        let _ = setup::set_autostart(true);
+    }
     vpn::adopt();
 
     let tray = (!snapshot).then(|| ksni::blocking::TrayMethods::spawn(Tray {
@@ -1072,7 +1075,10 @@ fn main() {
                 return fail(tr!("Not connected", "Sem conexão"));
             };
             match client.change_alias(name) {
-                Ok(()) => true,
+                Ok(()) => {
+                    ui.set_self_alias(name.into());
+                    true
+                }
                 Err(e) => fail(tr!("Could not rename: {e}", "Não foi possível renomear: {e}")),
             }
         });
