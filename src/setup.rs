@@ -447,7 +447,7 @@ fn set_hyprland_autostart(on: bool) -> Result<()> {
                 new_content.push('\n');
             }
             new_content.push_str(&format!(
-                "{marker_start}\nhl.exec_cmd(\"linmin-vpn --tray\")\n{marker_end}\n"
+                "{marker_start}\nhl.on(\"hyprland.start\", function()\n    hl.exec_cmd(\"linmin-vpn --tray\")\nend)\n{marker_end}\n"
             ));
         }
         if new_content != content {

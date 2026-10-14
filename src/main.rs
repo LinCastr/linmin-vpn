@@ -753,6 +753,37 @@ fn cli(args: &[String]) -> Option<i32> {
     }
 }
 
+fn init_window() -> AppWindow {
+    let start = std::time::Instant::now();
+    loop {
+        // No boot inicial, o processo pode subir milissegundos antes das variáveis
+        // WAYLAND_DISPLAY/DISPLAY serem propagadas. Procuramos o socket ativo.
+        if std::env::var_os("WAYLAND_DISPLAY").is_none() && std::env::var_os("DISPLAY").is_none() {
+            if let Ok(runtime) = std::env::var("XDG_RUNTIME_DIR") {
+                if let Ok(entries) = std::fs::read_dir(&runtime) {
+                    for entry in entries.flatten() {
+                        let name = entry.file_name();
+                        let s = name.to_string_lossy();
+                        if s.starts_with("wayland-") && !s.ends_with(".lock") {
+                            unsafe {
+                                std::env::set_var("WAYLAND_DISPLAY", s.as_ref());
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        match AppWindow::new() {
+            Ok(ui) => return ui,
+            Err(_e) if start.elapsed() < std::time::Duration::from_secs(6) => {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+            Err(e) => panic!("window: Could not initialize backend: {e}"),
+        }
+    }
+}
+
 // Main -------------------------------------------------------------------------
 
 fn main() {
@@ -771,7 +802,7 @@ fn main() {
     }
     let listener = if snapshot { None } else { let _ = std::fs::remove_file(&sock); UnixListener::bind(&sock).ok() };
 
-    let ui = AppWindow::new().expect("window");
+    let ui = init_window();
     // Only works once the platform exists (AppWindow::new creates it).
     let _ = slint::set_xdg_app_id(std::env::var("LINMIN_APP_ID").unwrap_or_else(|_| "linmin-vpn".into()));
     i18n::apply(&setup::load().language);
@@ -1415,7 +1446,7 @@ fn main() {
     }
 
     let cfg = setup::load();
-    if tray_only && cfg.connect_on_login && !vpn::running() {
+    if cfg.connect_on_login && !vpn::running() {
         start_vpn(&ui);
     }
     if !tray_only || !has_tray {
